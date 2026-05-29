@@ -1,0 +1,9 @@
+streamlit
+requests
+beautifulsoup4
+pandas
+plotly
+wbgapi
+feedparser
+python-dotenv
+lxml
