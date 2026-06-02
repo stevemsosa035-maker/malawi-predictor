@@ -7,3 +7,5 @@ wbgapi
 feedparser
 python-dotenv
 lxml
+statsmodels
+scipy
