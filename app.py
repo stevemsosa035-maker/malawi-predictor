@@ -341,23 +341,89 @@ elif page == "\U0001f4f0 News & Sentiment":
 # RISK SIGNALS
 # ════════════════════════════════════════════════════════════════
 elif page == "\u26a0\ufe0f Risk Signals":
+    from data.devaluation_risk import calculate_devaluation_risk, get_risk_label
+    import plotly.graph_objects as go
+
     st.title("Economic Risk Signals")
-    st.markdown("Automated signals based on current IMF data.")
     st.markdown("---")
+
     imf = load_imf()
     forex = load_forex()
+
+    inf_val, _  = get_current_value("Inflation Rate (%)", imf)
+    gdp_val, _  = get_current_value("GDP Growth (%)", imf)
+    debt_val, _ = get_current_value("Government Debt (% GDP)", imf)
+    ca_val, _   = get_current_value("Current Account (% GDP)", imf)
+    fx          = forex.get("rate")
+
+    risk = calculate_devaluation_risk(
+        inflation=inf_val,
+        mwk_per_usd=fx,
+        gdp_growth=gdp_val,
+        government_debt=debt_val,
+        current_account=ca_val,
+    )
+
+    score = risk["score"]
+    level = risk["level"]
+    message = risk["message"]
+
+    # ── Gauge ───────────────────────────────────────────────────
+    st.subheader("Kwacha Devaluation Risk Score")
+
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        label = get_risk_label(score)
+        st.metric("Risk Score", f"{score} / 100", label)
+        if level == "CRITICAL":
+            st.error(f"\U0001f534 {level} — {message}")
+        elif level == "HIGH":
+            st.warning(f"\U0001f7e0 {level} — {message}")
+        elif level == "MODERATE":
+            st.info(f"\U0001f7e1 {level} — {message}")
+        else:
+            st.success(f"\U0001f7e2 {level} — {message}")
+
+    with col2:
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=score,
+            title={"text": "Devaluation Risk", "font": {"color": "white"}},
+            gauge={
+                "axis": {"range": [0, 100], "tickcolor": "white"},
+                "bar": {"color": "white"},
+                "steps": [
+                    {"range": [0, 35],  "color": "#1a472a"},
+                    {"range": [35, 55], "color": "#7d6608"},
+                    {"range": [55, 75], "color": "#784212"},
+                    {"range": [75, 100],"color": "#641e16"},
+                ],
+                "threshold": {
+                    "line": {"color": "red", "width": 4},
+                    "thickness": 0.75,
+                    "value": score
+                }
+            }
+        ))
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="white",
+            height=300,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── Individual signals ───────────────────────────────────────
+    st.markdown("---")
+    st.subheader("Individual signals")
     signals = []
-    inf_val, _ = get_current_value("Inflation Rate (%)", imf)
     if inf_val:
         if inf_val > 25:
             signals.append(("\U0001f534 CRITICAL", "Inflation", f"{inf_val}% — Severely above target."))
         elif inf_val > 15:
             signals.append(("\U0001f7e0 HIGH", "Inflation", f"{inf_val}% — Well above target."))
-        elif inf_val > 8:
-            signals.append(("\U0001f7e1 MODERATE", "Inflation", f"{inf_val}% — Elevated."))
         else:
-            signals.append(("\U0001f7e2 LOW", "Inflation", f"{inf_val}% — Under control."))
-    gdp_val, _ = get_current_value("GDP Growth (%)", imf)
+            signals.append(("\U0001f7e1 MODERATE", "Inflation", f"{inf_val}% — Elevated."))
     if gdp_val:
         if gdp_val < 0:
             signals.append(("\U0001f534 CRITICAL", "GDP Growth", f"{gdp_val}% — Economy contracting."))
@@ -367,7 +433,6 @@ elif page == "\u26a0\ufe0f Risk Signals":
             signals.append(("\U0001f7e1 MODERATE", "GDP Growth", f"{gdp_val}% — Below potential."))
         else:
             signals.append(("\U0001f7e2 LOW", "GDP Growth", f"{gdp_val}% — Healthy."))
-    debt_val, _ = get_current_value("Government Debt (% GDP)", imf)
     if debt_val:
         if debt_val > 80:
             signals.append(("\U0001f534 CRITICAL", "Govt Debt", f"{debt_val}% of GDP — Crisis territory."))
@@ -375,7 +440,6 @@ elif page == "\u26a0\ufe0f Risk Signals":
             signals.append(("\U0001f7e0 HIGH", "Govt Debt", f"{debt_val}% of GDP — Above threshold."))
         else:
             signals.append(("\U0001f7e1 MODERATE", "Govt Debt", f"{debt_val}% of GDP — Watch closely."))
-    fx = forex.get("rate")
     if fx:
         if fx > 1700:
             signals.append(("\U0001f534 CRITICAL", "MWK/USD", f"1 USD = {fx:,.0f} MWK — Severe depreciation."))
@@ -392,5 +456,17 @@ elif page == "\u26a0\ufe0f Risk Signals":
             st.info(f"{level} | **{category}** — {message}")
         else:
             st.success(f"{level} | **{category}** — {message}")
+
+    # ── Component breakdown ──────────────────────────────────────
     st.markdown("---")
-    st.caption("Signals use IMF 2026 data. ARIMA forecast-based signals coming in Phase 3.")
+    st.subheader("Component breakdown")
+    for name, data in risk["components"].items():
+        s = data["score"]
+        w = data["weight"]
+        contribution = round(s * w, 1)
+        label = get_risk_label(s)
+        st.markdown(f"**{name}** — Score: {s}/100 | Weight: {int(w*100)}% | Contribution: {contribution}")
+        st.progress(s / 100)
+
+    st.markdown("---")
+    st.caption("Score combines inflation, exchange rate, GDP, debt, current account and news sentiment.")
