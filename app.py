@@ -308,34 +308,78 @@ elif page == "\U0001f3e6 Macro Indicators":
 # NEWS & SENTIMENT
 # ════════════════════════════════════════════════════════════════
 elif page == "\U0001f4f0 News & Sentiment":
+    from data.sentiment_scorer import score_news_feed, get_sentiment_emoji
+
     st.title("News & Sentiment")
+
     news_df = load_news()
+
     if news_df.empty:
         st.warning("No news available.")
     else:
-        total = len(news_df)
-        economic = int(news_df["is_economic"].sum())
-        col1, col2, col3 = st.columns(3)
+        scored_df, summary = score_news_feed(news_df)
+
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total headlines", total)
+            st.metric("Total headlines", summary["total"])
         with col2:
-            st.metric("Economic headlines", economic)
+            st.metric("\U0001f7e2 Positive", f"{summary['positive_pct']}%")
         with col3:
-            pct = round((economic / total) * 100) if total > 0 else 0
-            st.metric("Economic focus", f"{pct}%")
+            st.metric("\U0001f534 Negative", f"{summary['negative_pct']}%")
+        with col4:
+            score = summary["avg_score"]
+            mood = "Bearish \U0001f4c9" if score < -0.1 else "Bullish \U0001f4c8" if score > 0.1 else "Neutral \u26aa"
+            st.metric("Market mood", mood, f"Score: {score}")
+
         st.markdown("---")
-        tab1, tab2 = st.tabs(["\U0001f4ca Economic only", "\U0001f4f0 All headlines"])
+
+        # Sentiment bar chart
+        import plotly.graph_objects as go
+        fig = go.Figure(go.Bar(
+            x=["Positive", "Neutral", "Negative"],
+            y=[summary["positive_pct"], summary["neutral_pct"], summary["negative_pct"]],
+            marker_color=["#1a472a", "#7d6608", "#641e16"],
+        ))
+        fig.update_layout(
+            title="News sentiment breakdown (%)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="white",
+            height=250,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
+
+        tab1, tab2, tab3 = st.tabs([
+            "\U0001f534 Negative", "\U0001f7e2 Positive", "\U0001f4f0 All headlines"
+        ])
+
         with tab1:
-            econ = news_df[news_df["is_economic"] == True].reset_index(drop=True)
-            for _, row in econ.iterrows():
-                st.markdown(f"**[{row['source']}]** [{row['title']}]({row['link']})")
-                st.caption(str(row["date"])[:25])
-                st.markdown("---")
+            neg = scored_df[scored_df["sentiment"] == "negative"]
+            if neg.empty:
+                st.info("No negative headlines right now.")
+            else:
+                for _, row in neg.iterrows():
+                    st.markdown(f"\U0001f534 **[{row['source']}]** [{row['title']}]({row['link']})")
+                    st.caption(str(row["date"])[:25])
+                    st.markdown("---")
+
         with tab2:
-            for _, row in news_df.iterrows():
-                tag = "\U0001f4b0" if row["is_economic"] else "\u26aa"
-                st.markdown(f"{tag} **[{row['source']}]** [{row['title']}]({row['link']})")
-                st.caption(str(row["date"])[:25])
+            pos = scored_df[scored_df["sentiment"] == "positive"]
+            if pos.empty:
+                st.info("No positive headlines right now.")
+            else:
+                for _, row in pos.iterrows():
+                    st.markdown(f"\U0001f7e2 **[{row['source']}]** [{row['title']}]({row['link']})")
+                    st.caption(str(row["date"])[:25])
+                    st.markdown("---")
+
+        with tab3:
+            for _, row in scored_df.iterrows():
+                emoji = get_sentiment_emoji(row["sentiment"])
+                st.markdown(f"{emoji} **[{row['source']}]** [{row['title']}]({row['link']})")
+                st.caption(f"{str(row['date'])[:25]} | Score: {row['sentiment_score']}")
                 st.markdown("---")
 
 
