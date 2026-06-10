@@ -27,6 +27,7 @@ page = st.sidebar.radio(
         "\U0001f4b1 Exchange Rates",
         "\U0001f4c8 Inflation",
         "\U0001f52e Forecasts",
+        "\U0001f4b9 Investment Signals",
         "\U0001f3e6 Macro Indicators",
         "\U0001f4f0 News & Sentiment",
         "\u26a0\ufe0f Risk Signals",
@@ -123,6 +124,7 @@ if page == "\U0001f4ca Dashboard":
 # FORECASTS — NEW PAGE
 # ════════════════════════════════════════════════════════════════
 elif page == "\U0001f52e Forecasts":
+    "\U0001f4b9 Investment Signals",
     st.title("Economic Forecasts")
     st.markdown("ARIMA model predicting future values based on historical trends.")
     st.markdown("---")
@@ -340,6 +342,81 @@ elif page == "\U0001f4f0 News & Sentiment":
 # ════════════════════════════════════════════════════════════════
 # RISK SIGNALS
 # ════════════════════════════════════════════════════════════════
+elif page == "\U0001f4b9 Investment Signals":
+    from data.investment_signals import generate_signals, get_action_emoji
+
+    st.title("Investment Signals")
+    st.markdown("What to do with your money based on current Malawi economic conditions.")
+    st.markdown("---")
+
+    imf = load_imf()
+    forex = load_forex()
+
+    inf_val, _  = get_current_value("Inflation Rate (%)", imf)
+    gdp_val, _  = get_current_value("GDP Growth (%)", imf)
+    debt_val, _ = get_current_value("Government Debt (% GDP)", imf)
+    ca_val, _   = get_current_value("Current Account (% GDP)", imf)
+    fx          = forex.get("rate")
+
+    from data.devaluation_risk import calculate_devaluation_risk
+    risk = calculate_devaluation_risk(
+        inflation=inf_val, mwk_per_usd=fx,
+        gdp_growth=gdp_val, government_debt=debt_val,
+        current_account=ca_val
+    )
+
+    signals = generate_signals(
+        inflation=inf_val,
+        gdp_growth=gdp_val,
+        government_debt=debt_val,
+        current_account=ca_val,
+        mwk_per_usd=fx,
+        devaluation_score=risk["score"]
+    )
+
+    # Summary counts
+    buy_count  = sum(1 for s in signals if s["action"] == "BUY")
+    hold_count = sum(1 for s in signals if s["action"] == "HOLD")
+    avoid_count= sum(1 for s in signals if s["action"] == "AVOID")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("\U0001f7e2 BUY signals", buy_count)
+    with col2:
+        st.metric("\U0001f7e1 HOLD signals", hold_count)
+    with col3:
+        st.metric("\U0001f534 AVOID signals", avoid_count)
+    with col4:
+        st.metric("Devaluation risk", f"{risk['score']}/100", risk["level"])
+
+    st.markdown("---")
+
+    # Filter buttons
+    filter_action = st.radio(
+        "Filter by action",
+        ["All", "BUY", "HOLD", "AVOID"],
+        horizontal=True
+    )
+
+    filtered = signals if filter_action == "All" else [s for s in signals if s["action"] == filter_action]
+
+    for s in filtered:
+        action = s["action"]
+        emoji  = get_action_emoji(action)
+        asset  = s["asset"]
+        reason = s["reason"]
+        conf   = s["confidence"]
+
+        if action == "BUY":
+            st.success(f"{emoji} **{action} — {s['emoji']} {asset}**\n\n{reason}\n\n*Confidence: {conf}*")
+        elif action == "AVOID":
+            st.error(f"{emoji} **{action} — {s['emoji']} {asset}**\n\n{reason}\n\n*Confidence: {conf}*")
+        else:
+            st.warning(f"{emoji} **{action} — {s['emoji']} {asset}**\n\n{reason}\n\n*Confidence: {conf}*")
+
+    st.markdown("---")
+    st.caption("Signals are generated automatically from IMF, World Bank and live forex data. Not financial advice — always consult a professional.")
+
 elif page == "\u26a0\ufe0f Risk Signals":
     from data.devaluation_risk import calculate_devaluation_risk, get_risk_label
     import plotly.graph_objects as go
