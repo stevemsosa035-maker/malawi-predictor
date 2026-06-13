@@ -169,29 +169,30 @@ def get_risk_label(score):
 
 
 if __name__ == "__main__":
-    print("Testing Devaluation Risk Score...")
+    print("Testing Devaluation Risk Score with sentiment...")
     print("")
 
     import sys, os
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from data.imf_collector import fetch_all, get_current_value
     from data.forex_collector import fetch_latest_rate
+    from data.news_collector import fetch_all_news
+    from data.sentiment_scorer import score_news_feed
 
-    imf = fetch_all()
+    imf   = fetch_all()
     forex = fetch_latest_rate()
+    news  = fetch_all_news()
 
-    inflation, _    = get_current_value("Inflation Rate (%)", imf)
-    gdp, _          = get_current_value("GDP Growth (%)", imf)
-    debt, _         = get_current_value("Government Debt (% GDP)", imf)
-    ca, _           = get_current_value("Current Account (% GDP)", imf)
-    fx              = forex.get("rate")
+    inflation, _ = get_current_value("Inflation Rate (%)", imf)
+    gdp, _       = get_current_value("GDP Growth (%)", imf)
+    debt, _      = get_current_value("Government Debt (% GDP)", imf)
+    ca, _        = get_current_value("Current Account (% GDP)", imf)
+    fx           = forex.get("rate")
 
-    print(f"Inputs:")
-    print(f"  Inflation:        {inflation}%")
-    print(f"  MWK/USD:          {fx}")
-    print(f"  GDP Growth:       {gdp}%")
-    print(f"  Government Debt:  {debt}%")
-    print(f"  Current Account:  {ca}%")
+    _, sentiment_summary = score_news_feed(news)
+    neg_pct = sentiment_summary["negative_pct"]
+
+    print(f"News sentiment: {neg_pct}% negative headlines")
     print("")
 
     result = calculate_devaluation_risk(
@@ -200,6 +201,7 @@ if __name__ == "__main__":
         gdp_growth=gdp,
         government_debt=debt,
         current_account=ca,
+        news_negative_pct=neg_pct,
     )
 
     print(f"DEVALUATION RISK SCORE: {result['score']} / 100")

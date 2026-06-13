@@ -396,18 +396,29 @@ elif page == "\U0001f4b9 Investment Signals":
     imf = load_imf()
     forex = load_forex()
 
+    from data.sentiment_scorer import score_news_feed
     inf_val, _  = get_current_value("Inflation Rate (%)", imf)
     gdp_val, _  = get_current_value("GDP Growth (%)", imf)
     debt_val, _ = get_current_value("Government Debt (% GDP)", imf)
     ca_val, _   = get_current_value("Current Account (% GDP)", imf)
     fx          = forex.get("rate")
 
+    news_df = load_news()
+    _, sentiment_summary = score_news_feed(news_df)
+    neg_pct = sentiment_summary["negative_pct"]
+
+
     from data.devaluation_risk import calculate_devaluation_risk
     risk = calculate_devaluation_risk(
-        inflation=inf_val, mwk_per_usd=fx,
-        gdp_growth=gdp_val, government_debt=debt_val,
-        current_account=ca_val
+        inflation=inf_val,
+        mwk_per_usd=fx,
+        gdp_growth=gdp_val,
+        government_debt=debt_val,
+        current_account=ca_val,
+        news_negative_pct=neg_pct,
     )
+
+
 
     signals = generate_signals(
         inflation=inf_val,
@@ -477,12 +488,18 @@ elif page == "\u26a0\ufe0f Risk Signals":
     ca_val, _   = get_current_value("Current Account (% GDP)", imf)
     fx          = forex.get("rate")
 
+    from data.sentiment_scorer import score_news_feed
+    news_df = load_news()
+    _, sentiment_summary = score_news_feed(news_df)
+    neg_pct = sentiment_summary["negative_pct"]
+
     risk = calculate_devaluation_risk(
         inflation=inf_val,
         mwk_per_usd=fx,
         gdp_growth=gdp_val,
         government_debt=debt_val,
         current_account=ca_val,
+        news_negative_pct=neg_pct,
     )
 
     score = risk["score"]
