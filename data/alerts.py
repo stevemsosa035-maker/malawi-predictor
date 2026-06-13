@@ -85,7 +85,7 @@ def build_alert_email(triggered_alerts, risk_score, indicators):
         <h3>Current indicators:</h3>
         <ul>
             <li>Inflation: {indicators.get("inflation", "N/A")}%</li>
-            <li>MWK/USD: {indicators.get("mwk_per_usd", "N/A"):,.0f} if isinstance(indicators.get("mwk_per_usd"), float) else indicators.get("mwk_per_usd", "N/A")</li>
+           <li>MWK/USD: {int(indicators.get("mwk_per_usd", 0)):,} MWK per USD</li>
             <li>GDP Growth: {indicators.get("gdp_growth", "N/A")}%</li>
             <li>Govt Debt: {indicators.get("government_debt", "N/A")}% of GDP</li>
         </ul>
