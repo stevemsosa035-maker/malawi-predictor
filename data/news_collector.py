@@ -23,9 +23,40 @@ ECONOMIC_KEYWORDS = [
 
 
 RSS_FEEDS = {
-    "Nyasa Times": "https://www.nyasatimes.com/feed/",
-    "Malawi24":    "https://malawi24.com/feed/",
+    "Nyasa Times":     "https://www.nyasatimes.com/feed/",
+    "Malawi24":        "https://malawi24.com/feed/",
+    "Times of Malawi": "https://www.times.mw/feed/",
+    "Malawi Voice":    "https://www.malawivoice.com/feed/",
+    "Zodiak Online":   "https://www.zodiakmalawi.com/feed",
+    "MBC News":        "https://www.mbcmalawi.mw/feed/",
 }
+
+def fetch_rbm_statements():
+    """
+    Scrape RBM press statements from their website.
+    Returns list of articles.
+    """
+    articles = []
+    try:
+        url = "https://www.rbm.mw/Publications/MPCPressStatements/"
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        soup = BeautifulSoup(resp.text, "lxml")
+        for link in soup.find_all("a", href=True):
+            title = link.get_text(strip=True)
+            href = link["href"]
+            if title and len(title) > 10:
+                articles.append({
+                    "source": "RBM",
+                    "title": title,
+                    "link": href,
+                    "date": str(datetime.now()),
+                    "is_economic": True
+                })
+        print(f"OK: RBM — {len(articles)} statements found")
+    except Exception as e:
+        print(f"FAILED: RBM — {e}")
+    return articles[:10]
+
 
 
 def is_economic(headline):
@@ -69,6 +100,9 @@ def fetch_all_news():
     for name, url in RSS_FEEDS.items():
         articles = fetch_rss_feed(name, url)
         all_articles.extend(articles)
+
+    # Add RBM press statements
+    all_articles.extend(fetch_rbm_statements())
 
     if not all_articles:
         print("No articles retrieved from any source")
