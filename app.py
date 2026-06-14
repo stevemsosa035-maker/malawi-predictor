@@ -31,6 +31,7 @@ page = st.sidebar.radio(
         "\U0001f3e6 Macro Indicators",
         "\U0001f4f0 News & Sentiment",
         "\u26a0\ufe0f Risk Signals",
+        "\U0001f514 Alerts & Subscribe",
     ]
 )
 st.sidebar.markdown("---")
@@ -608,3 +609,91 @@ elif page == "\u26a0\ufe0f Risk Signals":
 
     st.markdown("---")
     st.caption("Score combines inflation, exchange rate, GDP, debt, current account and news sentiment.")
+
+elif page == "\U0001f514 Alerts & Subscribe":
+    from data.sentiment_scorer import score_news_feed
+    from data.devaluation_risk import calculate_devaluation_risk, get_risk_label
+    from data.alert_scheduler import run_alert_check
+
+    st.title("Alerts & Subscribe")
+    st.markdown("Get notified by email when economic thresholds are breached.")
+    st.markdown("---")
+
+    imf = load_imf()
+    forex = load_forex()
+    news_df = load_news()
+
+    inf_val, _ = get_current_value("Inflation Rate (%)", imf)
+    gdp_val, _ = get_current_value("GDP Growth (%)", imf)
+    debt_val, _ = get_current_value("Government Debt (% GDP)", imf)
+    ca_val, _ = get_current_value("Current Account (% GDP)", imf)
+    fx = forex.get("rate")
+
+    _, sentiment_summary = score_news_feed(news_df)
+    neg_pct = sentiment_summary["negative_pct"]
+
+    risk = calculate_devaluation_risk(
+        inflation=inf_val, mwk_per_usd=fx,
+        gdp_growth=gdp_val, government_debt=debt_val,
+        current_account=ca_val, news_negative_pct=neg_pct
+    )
+
+    # Current status
+    st.subheader("Current status")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Devaluation risk", f"{risk['score']}/100", risk["level"])
+    with col2:
+        st.metric("Inflation", f"{inf_val}%" if inf_val else "N/A")
+    with col3:
+        st.metric("MWK/USD", f"{fx:,.0f}" if fx else "N/A")
+
+    st.markdown("---")
+
+    # Alert thresholds display
+    st.subheader("Alert thresholds")
+    thresholds = [
+        ("Devaluation Risk Score", 75, risk["score"], "/100"),
+        ("Inflation Rate", 30, inf_val, "%"),
+        ("MWK/USD Rate", 1800, fx, " MWK"),
+        ("Government Debt", 80, debt_val, "% of GDP"),
+    ]
+    for label, threshold, current, unit in thresholds:
+        if current:
+            breached = (current >= threshold)
+            status = "\U0001f534 BREACHED" if breached else "\U0001f7e2 OK"
+            st.markdown(f"**{label}**: Current {current:,.1f}{unit} | Alert at {threshold}{unit} | {status}")
+            st.progress(min(current / threshold, 1.0))
+
+    st.markdown("---")
+
+    # Subscribe form
+    st.subheader("\U0001f4e7 Subscribe to alerts")
+    st.markdown("Enter your email to receive alerts when thresholds are breached.")
+
+    with st.form("alert_form"):
+        email_input = st.text_input("Your email address", placeholder="yourname@gmail.com")
+        submitted = st.form_submit_button("Subscribe & Check Now")
+
+        if submitted:
+            if not email_input or "@" not in email_input:
+                st.error("Please enter a valid email address.")
+            else:
+                with st.spinner("Checking thresholds and sending alert if needed..."):
+                    result = run_alert_check(
+                        risk_score=risk["score"],
+                        inflation=inf_val,
+                        mwk_per_usd=fx,
+                        gdp_growth=gdp_val,
+                        government_debt=debt_val,
+                        recipient_email=email_input,
+                    )
+                if result["status"] == "sent":
+                    st.success(f"\U0001f4e7 Alert sent to {email_input}! Check your inbox.")
+                elif result["status"] == "ok":
+                    st.info(f"\U0001f7e2 No thresholds breached right now. We will alert {email_input} when conditions change.")
+                else:
+                    st.warning(result["message"])
+
+    st.markdown("---")
+    st.caption("Alerts are sent automatically every 6 hours when thresholds are breached.")
