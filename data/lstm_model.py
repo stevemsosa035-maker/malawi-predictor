@@ -13,9 +13,9 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error
 
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
+from keras.models import Sequential
+from keras.layers import LSTM, Dense, Dropout
+from keras.callbacks import EarlyStopping
 
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"

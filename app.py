@@ -125,9 +125,11 @@ if page == "\U0001f4ca Dashboard":
 # FORECASTS — NEW PAGE
 # ════════════════════════════════════════════════════════════════
 elif page == "\U0001f52e Forecasts":
-    "\U0001f4b9 Investment Signals",
+    from data.forecaster import forecast_indicator, build_forecast_chart_data
+    from data.lstm_model import train_lstm, forecast_lstm
+
     st.title("Economic Forecasts")
-    st.markdown("ARIMA model predicting future values based on historical trends.")
+    st.markdown("Compare ARIMA and LSTM predictions side by side.")
     st.markdown("---")
 
     imf = load_imf()
@@ -145,80 +147,131 @@ elif page == "\U0001f52e Forecasts":
     if df is None or df.empty:
         st.error("No data available for this indicator.")
     else:
-        with st.spinner("Running ARIMA forecast model..."):
-            result = forecast_indicator(df, steps=steps, indicator_name=indicator)
+        col1, col2 = st.columns(2)
 
-        if result is None:
-            st.error("Could not generate forecast. Not enough historical data.")
-        else:
-            combined, fc = build_forecast_chart_data(df, result)
+        # ── ARIMA forecast ──────────────────────────────────────
+        with col1:
+            st.subheader("\U0001f7e2 ARIMA Forecast")
+            st.caption("Statistical model — looks at one indicator at a time")
+            with st.spinner("Running ARIMA..."):
+                arima_result = forecast_indicator(
+                    df, steps=steps, indicator_name=indicator)
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Last actual",
-                          f"{result['last_actual_value']}%",
-                          f"{result['last_actual_year']}")
-            with col2:
-                next_yr = result["years"][0]
-                next_val = result["forecast"][0]
-                delta = round(next_val - result["last_actual_value"], 2)
-                st.metric(f"Forecast {next_yr}",
-                          f"{next_val}%",
-                          f"{delta:+.2f}%")
-            with col3:
-                last_fc = result["forecast"][-1]
-                last_yr = result["years"][-1]
-                st.metric(f"Forecast {last_yr}",
-                          f"{last_fc}%", "")
+            if arima_result:
+                st.metric(
+                    f"Forecast {arima_result['years'][0]}",
+                    f"{arima_result['forecast'][0]}%",
+                    f"{arima_result['forecast'][0] - arima_result['last_actual_value']:+.2f}%"
+                )
+                st.metric(
+                    f"Forecast {arima_result['years'][-1]}",
+                    f"{arima_result['forecast'][-1]}%", "")
+            else:
+                st.warning("ARIMA could not generate forecast.")
 
-            # Combined chart
-            fig = go.Figure()
+        # ── LSTM forecast ────────────────────────────────────────
+        with col2:
+            st.subheader("\U0001f9e0 LSTM Forecast")
+            st.caption("Neural network — learns from ALL indicators together")
+            with st.spinner("Training LSTM neural network... (30-60 seconds)"):
+                dataframes = {k: v for k, v in imf.items() if not v.empty and len(v) >= 8}
+                if indicator in dataframes:
+                    model, scaler, history, mae = train_lstm(
+                        dataframes=dataframes,
+                        target_key=indicator,
+                        lookback=5,
+                        epochs=100,
+                    )
+                    if model:
+                        lstm_result = forecast_lstm(
+                            model=model, scaler=scaler,
+                            dataframes=dataframes,
+                            target_key=indicator, steps=steps
+                        )
+                    else:
+                        lstm_result = None
+                else:
+                    lstm_result = None
 
-            actual = combined[combined["type"] == "Actual"]
-            forecast = combined[combined["type"] == "Forecast"]
+            if lstm_result:
+                st.metric(
+                    f"Forecast {lstm_result['years'][0]}",
+                    f"{lstm_result['forecast'][0]}%",
+                    f"{lstm_result['forecast'][0] - lstm_result['last_actual_value']:+.2f}%"
+                )
+                st.metric(
+                    f"Forecast {lstm_result['years'][-1]}",
+                    f"{lstm_result['forecast'][-1]}%", "")
+                st.caption(f"Model accuracy (MAE): {mae:.4f}")
+            else:
+                st.warning("LSTM could not generate forecast.")
 
+        st.markdown("---")
+
+        # ── Combined comparison chart ────────────────────────────
+        st.subheader("ARIMA vs LSTM — comparison chart")
+
+        fig = go.Figure()
+
+        # Historical data
+        fig.add_trace(go.Scatter(
+            x=df["year"], y=df["value"],
+            mode="lines+markers",
+            name="Historical",
+            line=dict(color="#aaaaaa", width=2)
+        ))
+
+        # ARIMA forecast
+        if arima_result:
             fig.add_trace(go.Scatter(
-                x=actual["year"], y=actual["value"],
+                x=arima_result["years"], y=arima_result["forecast"],
                 mode="lines+markers",
-                name="Actual",
-                line=dict(color="#00C49F", width=2),
+                name="ARIMA Forecast",
+                line=dict(color="#00C49F", width=2, dash="dash")
             ))
 
+        # LSTM forecast
+        if lstm_result:
             fig.add_trace(go.Scatter(
-                x=forecast["year"], y=forecast["value"],
+                x=lstm_result["years"], y=lstm_result["forecast"],
                 mode="lines+markers",
-                name="Forecast",
-                line=dict(color="#FF4B4B", width=2, dash="dash"),
+                name="LSTM Forecast",
+                line=dict(color="#FF4B4B", width=2, dash="dot")
             ))
 
-            fig.add_trace(go.Scatter(
-                x=result["years"] + result["years"][::-1],
-                y=result["upper"] + result["lower"][::-1],
-                fill="toself",
-                fillcolor="rgba(255,75,75,0.1)",
-                line=dict(color="rgba(255,75,75,0)"),
-                name="Confidence range",
-            ))
+        fig.update_layout(
+            title=f"{indicator} — ARIMA vs LSTM Forecast",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="white",
+            hovermode="x unified",
+            legend=dict(bgcolor="rgba(0,0,0,0)")
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-            fig.update_layout(
-                title=f"{indicator} — Historical + {steps}-year Forecast",
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                font_color="white",
-                hovermode="x unified",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        st.markdown("---")
 
-            st.markdown("---")
-            st.subheader("Forecast table")
-            fc_table = pd.DataFrame({
-                "Year": result["years"],
-                "Forecast (%)": result["forecast"],
-                "Lower bound (%)": result["lower"],
-                "Upper bound (%)": result["upper"],
-            })
-            st.dataframe(fc_table, use_container_width=True)
-            st.caption("Forecast based on ARIMA(1,1,1) model. Confidence range shown at 80%.")
+        # ── Comparison table ─────────────────────────────────────
+        if arima_result and lstm_result:
+            st.subheader("Year by year comparison")
+            rows = []
+            for i, yr in enumerate(arima_result["years"]):
+                arima_val = arima_result["forecast"][i]
+                lstm_val = lstm_result["forecast"][i] if i < len(lstm_result["forecast"]) else None
+                diff = round(lstm_val - arima_val, 2) if lstm_val else None
+                rows.append({
+                    "Year": yr,
+                    "ARIMA (%)": arima_val,
+                    "LSTM (%)": lstm_val,
+                    "Difference": diff
+                })
+            comp_df = pd.DataFrame(rows)
+            st.dataframe(comp_df, use_container_width=True)
+            st.caption("Difference = LSTM minus ARIMA. Negative means LSTM is more optimistic.")
+
+        st.markdown("---")
+        st.caption("ARIMA: statistical time-series model. LSTM: neural network trained on all indicators simultaneously.")
+
 
 
 # ════════════════════════════════════════════════════════════════
