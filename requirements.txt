@@ -9,5 +9,3 @@ python-dotenv
 lxml
 statsmodels
 scipy
-tensorflow
-scikit_learn
