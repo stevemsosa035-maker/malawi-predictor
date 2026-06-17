@@ -125,8 +125,12 @@ if page == "\U0001f4ca Dashboard":
 # FORECASTS — NEW PAGE
 # ════════════════════════════════════════════════════════════════
 elif page == "\U0001f52e Forecasts":
+    try:
+        from data.lstm_model import train_lstm, forecast_lstm
+        LSTM_AVAILABLE = True
+    except ImportError:
+        LSTM_AVAILABLE = False
     from data.forecaster import forecast_indicator, build_forecast_chart_data
-    from data.lstm_model import train_lstm, forecast_lstm
 
     st.title("Economic Forecasts")
     st.markdown("Compare ARIMA and LSTM predictions side by side.")
@@ -173,38 +177,46 @@ elif page == "\U0001f52e Forecasts":
         with col2:
             st.subheader("\U0001f9e0 LSTM Forecast")
             st.caption("Neural network — learns from ALL indicators together")
-            with st.spinner("Training LSTM neural network... (30-60 seconds)"):
-                dataframes = {k: v for k, v in imf.items() if not v.empty and len(v) >= 8}
-                if indicator in dataframes:
-                    model, scaler, history, mae = train_lstm(
-                        dataframes=dataframes,
-                        target_key=indicator,
-                        lookback=5,
-                        epochs=100,
-                    )
-                    if model:
-                        lstm_result = forecast_lstm(
-                            model=model, scaler=scaler,
+            if not LSTM_AVAILABLE:
+                st.info("LSTM not available on this server. Run locally to see full comparison.")
+                lstm_result = None
+                mae = None
+            else:
+                with st.spinner("Training LSTM neural network... (30-60 seconds)"):
+                    dataframes = {k: v for k, v in imf.items() if not v.empty and len(v) >= 8}
+                    if indicator in dataframes:
+                        model, scaler, history, mae = train_lstm(
                             dataframes=dataframes,
-                            target_key=indicator, steps=steps
+                            target_key=indicator,
+                            lookback=5,
+                            epochs=100,
                         )
+                        if model:
+                            lstm_result = forecast_lstm(
+                                model=model, scaler=scaler,
+                                dataframes=dataframes,
+                                target_key=indicator, steps=steps
+                            )
+                        else:
+                            lstm_result = None
                     else:
                         lstm_result = None
-                else:
-                    lstm_result = None
+                        mae = None
 
-            if lstm_result:
-                st.metric(
-                    f"Forecast {lstm_result['years'][0]}",
-                    f"{lstm_result['forecast'][0]}%",
-                    f"{lstm_result['forecast'][0] - lstm_result['last_actual_value']:+.2f}%"
-                )
-                st.metric(
-                    f"Forecast {lstm_result['years'][-1]}",
-                    f"{lstm_result['forecast'][-1]}%", "")
-                st.caption(f"Model accuracy (MAE): {mae:.4f}")
-            else:
-                st.warning("LSTM could not generate forecast.")
+                if lstm_result:
+                    st.metric(
+                        f"Forecast {lstm_result['years'][0]}",
+                        f"{lstm_result['forecast'][0]}%",
+                        f"{lstm_result['forecast'][0] - lstm_result['last_actual_value']:+.2f}%"
+                    )
+                    st.metric(
+                        f"Forecast {lstm_result['years'][-1]}",
+                        f"{lstm_result['forecast'][-1]}%", "")
+                    if mae:
+                        st.caption(f"Model accuracy (MAE): {mae:.4f}")
+                else:
+                    st.warning("LSTM could not generate forecast.")
+                    lstm_result = None
 
         st.markdown("---")
 
@@ -213,7 +225,6 @@ elif page == "\U0001f52e Forecasts":
 
         fig = go.Figure()
 
-        # Historical data
         fig.add_trace(go.Scatter(
             x=df["year"], y=df["value"],
             mode="lines+markers",
@@ -221,7 +232,6 @@ elif page == "\U0001f52e Forecasts":
             line=dict(color="#aaaaaa", width=2)
         ))
 
-        # ARIMA forecast
         if arima_result:
             fig.add_trace(go.Scatter(
                 x=arima_result["years"], y=arima_result["forecast"],
@@ -230,7 +240,6 @@ elif page == "\U0001f52e Forecasts":
                 line=dict(color="#00C49F", width=2, dash="dash")
             ))
 
-        # LSTM forecast
         if lstm_result:
             fig.add_trace(go.Scatter(
                 x=lstm_result["years"], y=lstm_result["forecast"],
@@ -251,7 +260,6 @@ elif page == "\U0001f52e Forecasts":
 
         st.markdown("---")
 
-        # ── Comparison table ─────────────────────────────────────
         if arima_result and lstm_result:
             st.subheader("Year by year comparison")
             rows = []
@@ -268,9 +276,16 @@ elif page == "\U0001f52e Forecasts":
             comp_df = pd.DataFrame(rows)
             st.dataframe(comp_df, use_container_width=True)
             st.caption("Difference = LSTM minus ARIMA. Negative means LSTM is more optimistic.")
+        elif arima_result:
+            st.subheader("ARIMA forecast table")
+            fc_table = pd.DataFrame({
+                "Year": arima_result["years"],
+                "ARIMA Forecast (%)": arima_result["forecast"],
+            })
+            st.dataframe(fc_table, use_container_width=True)
 
         st.markdown("---")
-        st.caption("ARIMA: statistical time-series model. LSTM: neural network trained on all indicators simultaneously.")
+        st.caption("ARIMA: statistical model. LSTM: neural network trained on all indicators simultaneously.")
 
 
 
