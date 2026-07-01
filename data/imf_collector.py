@@ -21,60 +21,85 @@ INDICATORS = {
 }
 
 COUNTRY = "MWI"
+CUTOFF_YEAR = datetime.now().year
+IMF_PROJECTION_START = CUTOFF_YEAR + 1
+
 
 
 def fetch_indicator(code, name):
     """
-    Fetch a single indicator from IMF for Malawi.
-    Returns DataFrame with columns: year, value.
+    Fetch a single IMF indicator for Malawi.
+    Splits data into two clean sets:
+        - actuals: historical data up to current year
+        - imf_projections: IMF forecast from next year onwards
+    Our models only train on actuals.
+    IMF projections are stored separately for comparison.
     """
-    url = f"{BASE_URL}/PCPIPCH/{COUNTRY}"
-    url = f"{BASE_URL}/{code}/{COUNTRY}"
     try:
+        url = f"{BASE_URL}/data/{code}/MWI"
         resp = requests.get(url, timeout=15)
-        if resp.status_code != 200:
-            print(f"HTTP {resp.status_code} for {name}")
-            return None
+        resp.raise_for_status()
+        raw = resp.json()
+        values = raw.get("values", {}).get(code, {}).get("MWI", {})
 
-        data = resp.json()
-        values = data.get("values", {})
-        country_data = values.get(code, {}).get(COUNTRY, {})
+        if not values:
+            return None, None
 
-        if not country_data:
-            print(f"No data returned for {name}")
-            return None
-
-        records = []
-        for year_str, value in country_data.items():
+        rows = []
+        for year_str, val in values.items():
             try:
-                records.append({
-                    "year": int(year_str),
-                    "value": float(value)
-                })
+                rows.append({"year": int(year_str), "value": float(val)})
             except:
                 continue
 
-        df = pd.DataFrame(records)
-        df = df.sort_values("year").reset_index(drop=True)
-        print(f"OK: {name} — {len(df)} years of data")
-        return df
+        if not rows:
+            return None, None
+
+        df = pd.DataFrame(rows).sort_values("year").reset_index(drop=True)
+
+        # Split at cutoff year
+        actuals = df[df["year"] <= CUTOFF_YEAR].copy()
+        imf_proj = df[df["year"] > CUTOFF_YEAR].copy()
+
+        if actuals.empty:
+            return None, None
+
+        latest_yr = int(actuals.iloc[-1]["year"])
+        print(f"OK: {name} — {len(actuals)} years of actuals (up to {latest_yr}), {len(imf_proj)} IMF projection years")
+
+        return actuals, imf_proj if not imf_proj.empty else None
 
     except Exception as e:
-        print(f"Error fetching {name}: {e}")
-        return None
+        print(f"FAILED: {name} — {e}")
+        return None, None
 
+def get_current_value(indicator_name, actuals):
+    """Get the most recent actual value for an indicator."""
+    df = actuals.get(indicator_name)
+    if df is None or df.empty:
+        return None, None
+    latest = df.iloc[-1]
+    return round(float(latest["value"]), 2), int(latest["year"])
 
 def fetch_all():
     """
     Fetch all IMF indicators for Malawi.
-    Returns dict of indicator name -> DataFrame.
+    Returns two dicts:
+        actuals: {name: DataFrame} - historical only, for our models
+        imf_projections: {name: DataFrame} - IMF forecasts, for comparison
     """
-    results = {}
+    actuals = {}
+    imf_projections = {}
+
     for code, name in INDICATORS.items():
-        df = fetch_indicator(code, name)
-        if df is not None and not df.empty:
-            results[name] = df
-    return results
+        actual_df, proj_df = fetch_indicator(code, name)
+        if actual_df is not None:
+            actuals[name] = actual_df
+        if proj_df is not None:
+            imf_projections[name] = proj_df
+
+    return actuals, imf_projections
+
 
 
 def get_current_value(name, data):
@@ -104,14 +129,20 @@ def get_current_value(name, data):
 
 
 if __name__ == "__main__":
-    print("Fetching Malawi data from IMF...")
+    print(f"Fetching IMF data — actuals cut off at {CUTOFF_YEAR}...")
     print("")
-    data = fetch_all()
+    actuals, imf_proj = fetch_all()
     print("")
-    print(f"Fetched {len(data)} indicators.")
+    print(f"Actuals loaded: {len(actuals)} indicators")
+    print(f"IMF projections loaded: {len(imf_proj)} indicators")
     print("")
-    print("Current values:")
-    for name in data:
-        value, year = get_current_value(name, data)
-        if value is not None:
-            print(f"  {name}: {value} ({year})")
+    for name, df in actuals.items():
+        val, yr = get_current_value(name, actuals)
+        if val:
+            print(f"  {name}: {val} ({yr})")
+    if imf_proj:
+        print("")
+        print("IMF projections (for comparison only):")
+        for name, df in imf_proj.items():
+            print(f"  {name}: {list(df['year'])} -> {list(df['value'].round(2))}")
+
