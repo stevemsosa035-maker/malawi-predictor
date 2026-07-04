@@ -1,7 +1,5 @@
 """
-Investment Signals for Malawi Economic Predictor.
-Translates economic conditions into specific
-investment decisions and recommendations.
+Investment Signals — rate-aware sector rotation engine.
 """
 
 
@@ -12,233 +10,114 @@ def generate_signals(
     current_account=None,
     mwk_per_usd=None,
     devaluation_score=None,
+    rate_env=None,
 ):
-    """
-    Takes all economic indicators and returns
-    a list of investment signals with actions.
-
-    Each signal has:
-        - asset: what investment type
-        - action: BUY / HOLD / AVOID / HEDGE
-        - reason: plain English explanation
-        - confidence: HIGH / MEDIUM / LOW
-    """
     signals = []
+    policy_rate = rate_env["current_rate"] if rate_env else 26.0
+    lending_rate = rate_env["estimated_lending_rate"] if rate_env else 37.0
+    cycle = rate_env["cycle_phase"] if rate_env else "PLATEAU"
+    tbill_364 = rate_env["tbill_rates"]["364-day"]["rate"] if rate_env else 28.0
+    tbill_91  = rate_env["tbill_rates"]["91-day"]["rate"]  if rate_env else 26.5
+    real_rate = (lending_rate - inflation) if inflation else None
 
-    # ── USD / Foreign Currency ───────────────────────────────────
+    # USD
     if mwk_per_usd and devaluation_score:
         if devaluation_score >= 65:
-            signals.append({
-                "asset": "USD / Foreign Currency",
-                "action": "BUY",
-                "reason": f"Devaluation risk is {devaluation_score}/100. Holding USD protects your wealth if MWK weakens further. Current rate: 1 USD = {mwk_per_usd:,.0f} MWK.",
-                "confidence": "HIGH",
-                "emoji": "\U0001f4b5"
-            })
-        elif devaluation_score >= 45:
-            signals.append({
-                "asset": "USD / Foreign Currency",
-                "action": "HOLD",
-                "reason": f"Moderate devaluation risk at {devaluation_score}/100. Keep some savings in USD as a hedge but do not convert everything.",
-                "confidence": "MEDIUM",
-                "emoji": "\U0001f4b5"
-            })
+            signals.append({"asset": "USD / Foreign Currency", "action": "BUY",
+                "reason": f"Devaluation risk at {devaluation_score}/100. Policy rate cut to {policy_rate}% — kwacha may weaken further. Hold USD.",
+                "confidence": "HIGH", "emoji": "\U0001f4b5"})
         else:
-            signals.append({
-                "asset": "USD / Foreign Currency",
-                "action": "HOLD",
-                "reason": "Low devaluation risk. No urgent need to convert to foreign currency.",
-                "confidence": "MEDIUM",
-                "emoji": "\U0001f4b5"
-            })
+            signals.append({"asset": "USD / Foreign Currency", "action": "HOLD",
+                "reason": f"Moderate risk. Policy rate at {policy_rate}% still supports kwacha. Monitor next MPC decision.",
+                "confidence": "MEDIUM", "emoji": "\U0001f4b5"})
 
-    # ── Government Bonds / Treasury Bills ───────────────────────
-    if inflation and government_debt:
-        if inflation > 20 and government_debt > 70:
-            signals.append({
-                "asset": "Government Bonds / T-Bills",
-                "action": "AVOID",
-                "reason": f"Inflation at {inflation}% erodes bond returns. Government debt at {government_debt}% of GDP raises default risk. Real returns are likely negative.",
-                "confidence": "HIGH",
-                "emoji": "\U0001f4dc"
-            })
-        elif inflation > 15:
-            signals.append({
-                "asset": "Government Bonds / T-Bills",
-                "action": "HOLD",
-                "reason": f"Short-term T-Bills may still beat inflation if rates are above {inflation}%. Check current RBM T-Bill rates before committing.",
-                "confidence": "MEDIUM",
-                "emoji": "\U0001f4dc"
-            })
-        else:
-            signals.append({
-                "asset": "Government Bonds / T-Bills",
-                "action": "BUY",
-                "reason": "Inflation under control. Government bonds offer reasonable real returns.",
-                "confidence": "MEDIUM",
-                "emoji": "\U0001f4dc"
-            })
+    # Bonds
+    if cycle in ["EARLY_EASING", "DEEP_EASING"]:
+        signals.append({"asset": "Government Bonds / T-Bills", "action": "BUY",
+            "reason": f"Rate cutting cycle started ({policy_rate}%). Bond prices rise as rates fall. Buy 364-day T-bills at {tbill_364}% now before further cuts compress yields.",
+            "confidence": "HIGH", "emoji": "\U0001f4dc"})
+    elif inflation and inflation > 20:
+        signals.append({"asset": "Government Bonds / T-Bills", "action": "AVOID",
+            "reason": f"Inflation at {inflation}% with policy rate {policy_rate}%. Real bond returns negative. Avoid.",
+            "confidence": "HIGH", "emoji": "\U0001f4dc"})
+    else:
+        signals.append({"asset": "Government Bonds / T-Bills", "action": "HOLD",
+            "reason": f"91-day T-bill at {tbill_91}%. Check if rate exceeds inflation before committing.",
+            "confidence": "MEDIUM", "emoji": "\U0001f4dc"})
 
-    # ── Real Estate ──────────────────────────────────────────────
+    # Banks
+    if cycle in ["EARLY_EASING", "DEEP_EASING"]:
+        signals.append({"asset": "Commercial Banks (NICO, NBS, FDH)", "action": "HOLD",
+            "reason": f"Banks have fat spreads ({lending_rate:.0f}% lending vs {policy_rate}% policy). But rate cuts will compress margins. Hold — watch next MPC.",
+            "confidence": "MEDIUM", "emoji": "\U0001f3e6"})
+    else:
+        signals.append({"asset": "Commercial Banks (NICO, NBS, FDH)", "action": "BUY",
+            "reason": f"High rate environment ({lending_rate:.0f}% lending rate) = fat spreads = strong net interest income. Banks printing money.",
+            "confidence": "HIGH", "emoji": "\U0001f3e6"})
+
+    # Real Estate
     if inflation and gdp_growth:
-        if inflation > 20 and gdp_growth > 0:
-            signals.append({
-                "asset": "Real Estate / Property",
-                "action": "BUY",
-                "reason": f"High inflation at {inflation}% increases property values in nominal terms. Real assets protect wealth during inflationary periods. GDP still growing at {gdp_growth}%.",
-                "confidence": "HIGH",
-                "emoji": "\U0001f3e0"
-            })
-        elif gdp_growth < 1:
-            signals.append({
-                "asset": "Real Estate / Property",
-                "action": "HOLD",
-                "reason": f"GDP growth too slow at {gdp_growth}% to drive strong property demand. Hold existing property but delay new purchases.",
-                "confidence": "MEDIUM",
-                "emoji": "\U0001f3e0"
-            })
+        if cycle == "EARLY_EASING" and inflation > 15:
+            signals.append({"asset": "Real Estate / Property", "action": "BUY",
+                "reason": f"Rate cuts starting — financing gets cheaper. Buy before lending rates fall and demand rises. Inflation {inflation}% still inflating asset values.",
+                "confidence": "HIGH", "emoji": "\U0001f3e0"})
+        elif real_rate and real_rate > 8:
+            signals.append({"asset": "Real Estate / Property", "action": "HOLD",
+                "reason": f"Real lending rate {real_rate:.1f}% makes leveraged property expensive. Cash buyers fine — avoid debt-financed purchases.",
+                "confidence": "MEDIUM", "emoji": "\U0001f3e0"})
         else:
-            signals.append({
-                "asset": "Real Estate / Property",
-                "action": "BUY",
-                "reason": f"Stable conditions. Property remains a good long-term store of value in Malawi.",
-                "confidence": "MEDIUM",
-                "emoji": "\U0001f3e0"
-            })
+            signals.append({"asset": "Real Estate / Property", "action": "BUY",
+                "reason": f"Property protects against {inflation}% inflation. GDP {gdp_growth}% supports demand.",
+                "confidence": "MEDIUM", "emoji": "\U0001f3e0"})
 
-    # ── Agricultural Investment ──────────────────────────────────
+    # Agriculture
     if inflation and current_account:
-        if inflation > 15 and current_account < -10:
-            signals.append({
-                "asset": "Agriculture / Agribusiness",
-                "action": "BUY",
-                "reason": f"Food price inflation and a large trade deficit of {current_account}% of GDP mean agricultural production is highly valuable. Export crops earn foreign currency.",
-                "confidence": "HIGH",
-                "emoji": "\U0001f33d"
-            })
-        else:
-            signals.append({
-                "asset": "Agriculture / Agribusiness",
-                "action": "HOLD",
-                "reason": "Agriculture remains a stable sector in Malawi. Monitor rainfall and tobacco prices.",
-                "confidence": "MEDIUM",
-                "emoji": "\U0001f33d"
-            })
+        signals.append({"asset": "Agriculture / Agribusiness", "action": "BUY",
+            "reason": f"Agriculture is rate-insensitive — driven by rainfall and commodity prices, not credit. Trade deficit {current_account}% of GDP means export crops earn scarce forex. Inflation {inflation}% makes local production valuable. Rate-immune sector.",
+            "confidence": "HIGH", "emoji": "\U0001f33d"})
 
-    # ── Stock Market / Malawi Stock Exchange ─────────────────────
+    # Manufacturing
+    if real_rate and real_rate > 5:
+        signals.append({"asset": "Manufacturing / Capital-Intensive", "action": "AVOID",
+            "reason": f"Real lending rate {real_rate:.1f}% destroys margins for businesses that borrow to operate. Avoid until rates fall further.",
+            "confidence": "HIGH", "emoji": "\U0001f3ed"})
+    else:
+        signals.append({"asset": "Manufacturing / Capital-Intensive", "action": "HOLD",
+            "reason": "Borrowing costs manageable. Watch rate trajectory.",
+            "confidence": "LOW", "emoji": "\U0001f3ed"})
+
+    # MSE
     if gdp_growth and inflation:
-        if gdp_growth < 2 and inflation > 20:
-            signals.append({
-                "asset": "Malawi Stock Exchange (MSE)",
-                "action": "AVOID",
-                "reason": f"Stagflation conditions — low growth at {gdp_growth}% with high inflation at {inflation}% — are bad for corporate earnings and stock valuations.",
-                "confidence": "HIGH",
-                "emoji": "\U0001f4c9"
-            })
-        elif gdp_growth >= 4 and inflation < 15:
-            signals.append({
-                "asset": "Malawi Stock Exchange (MSE)",
-                "action": "BUY",
-                "reason": f"Good growth at {gdp_growth}% with manageable inflation at {inflation}%. Corporate profits likely rising.",
-                "confidence": "HIGH",
-                "emoji": "\U0001f4c8"
-            })
+        if cycle == "EARLY_EASING" and gdp_growth > 2:
+            signals.append({"asset": "Malawi Stock Exchange (MSE)", "action": "BUY",
+                "reason": f"Early rate cut cycle with GDP {gdp_growth}% is textbook equity entry. Rate cuts lower discount rates — valuations expand. Target low-debt, cash-rich companies.",
+                "confidence": "HIGH", "emoji": "\U0001f4c8"})
+        elif gdp_growth < 2 and inflation > 20:
+            signals.append({"asset": "Malawi Stock Exchange (MSE)", "action": "AVOID",
+                "reason": f"Stagflation — {gdp_growth}% growth with {inflation}% inflation crushes earnings. Lending at {lending_rate:.0f}% destroys leveraged companies.",
+                "confidence": "HIGH", "emoji": "\U0001f4c9"})
         else:
-            signals.append({
-                "asset": "Malawi Stock Exchange (MSE)",
-                "action": "HOLD",
-                "reason": "Mixed conditions. Selective stock picking may work but broad market entry is risky.",
-                "confidence": "LOW",
-                "emoji": "\U0001f4ca"
-            })
+            signals.append({"asset": "Malawi Stock Exchange (MSE)", "action": "HOLD",
+                "reason": "Mixed signals. Favour low-debt, forex-earning companies.",
+                "confidence": "LOW", "emoji": "\U0001f4ca"})
 
-    # ── Cash (MWK savings) ───────────────────────────────────────
+    # Cash
     if inflation:
         if inflation > 20:
-            signals.append({
-                "asset": "Cash savings (MWK)",
-                "action": "AVOID",
-                "reason": f"Holding idle MWK cash at {inflation}% inflation means your money loses value fast. Move cash into assets or foreign currency.",
-                "confidence": "HIGH",
-                "emoji": "\U0001f4b0"
-            })
-        elif inflation > 10:
-            signals.append({
-                "asset": "Cash savings (MWK)",
-                "action": "HOLD",
-                "reason": f"Inflation at {inflation}% is elevated. Keep only emergency cash in MWK. Put the rest to work.",
-                "confidence": "MEDIUM",
-                "emoji": "\U0001f4b0"
-            })
+            signals.append({"asset": "Cash savings (MWK)", "action": "AVOID",
+                "reason": f"Inflation {inflation}% destroys idle cash. Real return on MWK deposits is negative. Move to T-bills, USD or real assets.",
+                "confidence": "HIGH", "emoji": "\U0001f4b0"})
         else:
-            signals.append({
-                "asset": "Cash savings (MWK)",
-                "action": "HOLD",
-                "reason": "Inflation manageable. Cash savings are acceptable short term.",
-                "confidence": "LOW",
-                "emoji": "\U0001f4b0"
-            })
+            signals.append({"asset": "Cash savings (MWK)", "action": "HOLD",
+                "reason": "Inflation manageable. Short-term MWK deposits acceptable.",
+                "confidence": "LOW", "emoji": "\U0001f4b0"})
 
     return signals
 
 
 def get_action_color(action):
-    colors = {
-        "BUY":   "green",
-        "HOLD":  "orange",
-        "AVOID": "red",
-        "HEDGE": "blue",
-    }
-    return colors.get(action, "grey")
+    return {"BUY": "green", "HOLD": "orange", "AVOID": "red", "HEDGE": "blue"}.get(action, "grey")
 
 
 def get_action_emoji(action):
-    emojis = {
-        "BUY":   "\U0001f7e2",
-        "HOLD":  "\U0001f7e1",
-        "AVOID": "\U0001f534",
-        "HEDGE": "\U0001f535",
-    }
-    return emojis.get(action, "")
-
-
-if __name__ == "__main__":
-    print("Testing Investment Signals...")
-    print("")
-
-    import sys, os
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from data.imf_collector import fetch_all, get_current_value
-    from data.forex_collector import fetch_latest_rate
-    from data.devaluation_risk import calculate_devaluation_risk
-
-    imf = fetch_all()
-    forex = fetch_latest_rate()
-
-    inflation, _    = get_current_value("Inflation Rate (%)", imf)
-    gdp, _          = get_current_value("GDP Growth (%)", imf)
-    debt, _         = get_current_value("Government Debt (% GDP)", imf)
-    ca, _           = get_current_value("Current Account (% GDP)", imf)
-    fx              = forex.get("rate")
-
-    risk = calculate_devaluation_risk(
-        inflation=inflation, mwk_per_usd=fx,
-        gdp_growth=gdp, government_debt=debt,
-        current_account=ca
-    )
-
-    signals = generate_signals(
-        inflation=inflation,
-        gdp_growth=gdp,
-        government_debt=debt,
-        current_account=ca,
-        mwk_per_usd=fx,
-        devaluation_score=risk["score"]
-    )
-
-    print(f"Generated {len(signals)} investment signals:")
-    print("")
-    for s in signals:
-        print(f"  {s['action']} — {s['asset']}")
-        print(f"    {s['reason']}")
-        print("")
+    return {"BUY": "\U0001f7e2", "HOLD": "\U0001f7e1", "AVOID": "\U0001f534", "HEDGE": "\U0001f535"}.get(action, "")

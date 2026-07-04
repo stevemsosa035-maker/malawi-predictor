@@ -13,6 +13,8 @@ from data.forecaster import forecast_indicator, build_forecast_chart_data
 from data.devaluation_risk import calculate_devaluation_risk, get_risk_label
 from data.investment_signals import generate_signals, get_action_emoji
 from data.sentiment_scorer import score_news_feed, get_sentiment_emoji
+from data.rbm_rates_collector import (
+    get_policy_rate_history, get_current_policy_rate, get_rate_environment)
 
 st.set_page_config(
     page_title="Malawi Economic Predictor",
@@ -31,6 +33,8 @@ page = st.sidebar.radio(
         "\U0001f4c8 Inflation",
         "\U0001f52e Forecasts",
         "\U0001f4b9 Investment Signals",
+        "\U0001f3e6 Policy Rate",
+        "\U0001f4b3 Interest Rates",
         "\U0001f3e6 Macro Indicators",
         "\U0001f4f0 News & Sentiment",
         "\u26a0\ufe0f Risk Signals",
@@ -38,7 +42,7 @@ page = st.sidebar.radio(
     ]
 )
 st.sidebar.markdown("---")
-st.sidebar.caption("IMF · World Bank · RBM · Live news")
+st.sidebar.caption("IMF \u00b7 RBM \u00b7 World Bank \u00b7 Live news")
 
 
 @st.cache_data(ttl=21600)
@@ -46,16 +50,13 @@ def load_imf():
     actuals, imf_proj = imf_fetch()
     return actuals, imf_proj
 
-
 @st.cache_data(ttl=21600)
 def load_wb():
     return wb_fetch(start_year=2000)
 
-
 @st.cache_data(ttl=3600)
 def load_forex():
     return fetch_latest_rate()
-
 
 @st.cache_data(ttl=3600)
 def load_news():
@@ -67,23 +68,28 @@ def load_news():
 # ════════════════════════════════════════════════════════════════
 if page == "\U0001f4ca Dashboard":
     st.title("Malawi Economic Predictor")
-    st.markdown("Live data — IMF · World Bank · RBM · Malawi news")
+    st.markdown("Live data — IMF \u00b7 RBM \u00b7 World Bank \u00b7 Malawi news")
     st.markdown("---")
     imf, imf_proj = load_imf()
     forex = load_forex()
-    col1, col2, col3, col4 = st.columns(4)
+    pr = get_current_policy_rate()
+    col1, col2, col3, col4, col5 = st.columns(5)
     inf_val, inf_yr = get_current_value("Inflation Rate (%)", imf)
     with col1:
-        st.metric("\U0001f525 Inflation", f"{inf_val}%" if inf_val else "N/A", f"IMF {inf_yr}" if inf_yr else "")
+        st.metric("\U0001f525 Inflation", f"{inf_val}%" if inf_val else "N/A", f"IMF {inf_yr}")
     gdp_val, gdp_yr = get_current_value("GDP Growth (%)", imf)
     with col2:
-        st.metric("\U0001f4c8 GDP Growth", f"{gdp_val}%" if gdp_val else "N/A", f"IMF {gdp_yr}" if gdp_yr else "")
-    debt_val, debt_yr = get_current_value("Government Debt (% GDP)", imf)
+        st.metric("\U0001f4c8 GDP Growth", f"{gdp_val}%" if gdp_val else "N/A", f"IMF {gdp_yr}")
+    debt_val, _ = get_current_value("Government Debt (% GDP)", imf)
     with col3:
-        st.metric("\U0001f3e6 Govt Debt", f"{debt_val}%" if debt_val else "N/A", f"IMF {debt_yr}" if debt_yr else "")
+        st.metric("\U0001f3e6 Govt Debt", f"{debt_val}%" if debt_val else "N/A", "IMF")
     fx = forex.get("rate")
     with col4:
-        st.metric("\U0001f4b1 MWK/USD", f"{fx:,.0f}" if fx else "N/A", "Live rate")
+        st.metric("\U0001f4b1 MWK/USD", f"{fx:,.0f}" if fx else "N/A", "Live")
+    with col5:
+        env = get_rate_environment()
+        st.metric("\U0001f3e6 Policy Rate", f"{pr['rate']}%",
+            f"{pr['change']:+.1f}pp {pr['decision']}")
     st.markdown("---")
     inf_df = imf.get("Inflation Rate (%)")
     if inf_df is not None and not inf_df.empty:
@@ -114,12 +120,11 @@ elif page == "\U0001f4b1 Exchange Rates":
     forex = load_forex()
     wb = load_wb()
     fx_rate = forex.get("rate")
-    fx_time = forex.get("timestamp")
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Live rate", f"1 USD = {fx_rate:,.2f} MWK" if fx_rate else "N/A", "Live")
     with col2:
-        st.metric("Source", forex.get("source", "N/A"), str(fx_time or "")[:25])
+        st.metric("Source", forex.get("source", "N/A"), str(forex.get("timestamp",""))[:25])
     st.markdown("---")
     fx_df = wb.get("Exchange rate MWK per USD")
     if fx_df is not None and not fx_df.empty:
@@ -173,44 +178,32 @@ elif page == "\U0001f52e Forecasts":
     except ImportError:
         LSTM_AVAILABLE = False
     from data.forecaster import forecast_indicator, build_forecast_chart_data
-
     st.title("Economic Forecasts")
     st.markdown("Our independent forecasts vs IMF projections — starting from 2027.")
     st.markdown("---")
-
     imf, imf_proj = load_imf()
-
-    indicator = st.selectbox(
-        "Select indicator to forecast",
-        ["Inflation Rate (%)", "GDP Growth (%)",
-         "Government Debt (% GDP)", "Current Account (% GDP)"]
-    )
-
+    indicator = st.selectbox("Select indicator to forecast",
+        ["Inflation Rate (%)", "GDP Growth (%)", "Government Debt (% GDP)", "Current Account (% GDP)"])
     steps = st.slider("Years ahead to forecast", 1, 10, 5)
     df = imf.get(indicator)
-
     if df is None or df.empty:
         st.error("No data available for this indicator.")
     else:
         col1, col2 = st.columns(2)
-
         with col1:
             st.subheader("\U0001f7e2 Our ARIMA Forecast")
-            st.caption("Statistical model trained on actuals only — independent of IMF")
+            st.caption("Statistical model trained on actuals only")
             with st.spinner("Running ARIMA..."):
                 arima_result = forecast_indicator(df, steps=steps, indicator_name=indicator)
             if arima_result:
                 st.metric(f"Forecast {arima_result['years'][0]}", f"{arima_result['forecast'][0]}%",
                     f"{arima_result['forecast'][0] - arima_result['last_actual_value']:+.2f}%")
                 st.metric(f"Forecast {arima_result['years'][-1]}", f"{arima_result['forecast'][-1]}%", "")
-            else:
-                st.warning("ARIMA could not generate forecast.")
-
         with col2:
             st.subheader("\U0001f9e0 Our LSTM Forecast")
-            st.caption("Neural network trained on actuals only — independent of IMF")
+            st.caption("Neural network trained on actuals only")
             if not LSTM_AVAILABLE:
-                st.info("LSTM runs locally only. Open app on your laptop to see full comparison.")
+                st.info("LSTM runs locally only.")
                 lstm_result = None
                 mae = None
             else:
@@ -218,8 +211,7 @@ elif page == "\U0001f52e Forecasts":
                     dataframes = {k: v for k, v in imf.items() if not v.empty and len(v) >= 8}
                     if indicator in dataframes:
                         model, scaler, history, mae = train_lstm(
-                            dataframes=dataframes, target_key=indicator,
-                            lookback=5, epochs=100)
+                            dataframes=dataframes, target_key=indicator, lookback=5, epochs=100)
                         lstm_result = forecast_lstm(model=model, scaler=scaler,
                             dataframes=dataframes, target_key=indicator, steps=steps) if model else None
                     else:
@@ -229,56 +221,43 @@ elif page == "\U0001f52e Forecasts":
                     st.metric(f"Forecast {lstm_result['years'][0]}", f"{lstm_result['forecast'][0]}%",
                         f"{lstm_result['forecast'][0] - lstm_result['last_actual_value']:+.2f}%")
                     st.metric(f"Forecast {lstm_result['years'][-1]}", f"{lstm_result['forecast'][-1]}%", "")
-                    if mae:
-                        st.caption(f"Model accuracy (MAE): {mae:.4f}")
+                    if mae: st.caption(f"Model accuracy (MAE): {mae:.4f}")
                 else:
                     st.warning("LSTM could not generate forecast.")
                     lstm_result = None
-
         st.markdown("---")
         st.subheader("Our forecasts vs IMF projections")
-
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df["year"], y=df["value"],
-            mode="lines+markers", name="Historical actuals",
-            line=dict(color="#aaaaaa", width=2)))
+        fig.add_trace(go.Scatter(x=df["year"], y=df["value"], mode="lines+markers",
+            name="Historical actuals", line=dict(color="#aaaaaa", width=2)))
         if arima_result:
             fig.add_trace(go.Scatter(x=arima_result["years"], y=arima_result["forecast"],
-                mode="lines+markers", name="Our ARIMA",
-                line=dict(color="#00C49F", width=2, dash="dash")))
+                mode="lines+markers", name="Our ARIMA", line=dict(color="#00C49F", width=2, dash="dash")))
         if lstm_result:
             fig.add_trace(go.Scatter(x=lstm_result["years"], y=lstm_result["forecast"],
-                mode="lines+markers", name="Our LSTM",
-                line=dict(color="#FF4B4B", width=2, dash="dot")))
+                mode="lines+markers", name="Our LSTM", line=dict(color="#FF4B4B", width=2, dash="dot")))
         imf_line = imf_proj.get(indicator)
         if imf_line is not None and not imf_line.empty:
             fig.add_trace(go.Scatter(x=imf_line["year"], y=imf_line["value"],
-                mode="lines+markers", name="IMF Projection",
-                line=dict(color="#F4C542", width=2, dash="longdash")))
-        fig.update_layout(
-            title=f"{indicator} — Our Forecasts vs IMF Projections (from 2027)",
+                mode="lines+markers", name="IMF Projection", line=dict(color="#F4C542", width=2, dash="longdash")))
+        fig.update_layout(title=f"{indicator} — Our Forecasts vs IMF Projections (from 2027)",
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            font_color="white", hovermode="x unified",
-            legend=dict(bgcolor="rgba(0,0,0,0)"))
+            font_color="white", hovermode="x unified", legend=dict(bgcolor="rgba(0,0,0,0)"))
         st.plotly_chart(fig, use_container_width=True)
-
         st.markdown("---")
         if arima_result:
             st.subheader("Year by year comparison")
             rows = []
-            imf_line = imf_proj.get(indicator)
             for i, yr in enumerate(arima_result["years"]):
                 arima_val = arima_result["forecast"][i]
                 lstm_val = lstm_result["forecast"][i] if lstm_result and i < len(lstm_result["forecast"]) else None
                 imf_val = None
                 if imf_line is not None:
                     imf_row = imf_line[imf_line["year"] == yr]
-                    if not imf_row.empty:
-                        imf_val = round(float(imf_row.iloc[0]["value"]), 2)
-                rows.append({"Year": yr, "Our ARIMA (%)": arima_val,
-                    "Our LSTM (%)": lstm_val, "IMF Projection (%)": imf_val})
+                    if not imf_row.empty: imf_val = round(float(imf_row.iloc[0]["value"]), 2)
+                rows.append({"Year": yr, "Our ARIMA (%)": arima_val, "Our LSTM (%)": lstm_val, "IMF Projection (%)": imf_val})
             st.dataframe(pd.DataFrame(rows), use_container_width=True)
-            st.caption("Grey = history | Green = our ARIMA | Red = our LSTM | Yellow = IMF. All forecasts start from 2027.")
+            st.caption("Grey = history | Green = our ARIMA | Red = our LSTM | Yellow = IMF.")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -286,7 +265,7 @@ elif page == "\U0001f52e Forecasts":
 # ════════════════════════════════════════════════════════════════
 elif page == "\U0001f4b9 Investment Signals":
     st.title("Investment Signals")
-    st.markdown("What to do with your money based on current Malawi economic conditions.")
+    st.markdown("Rate-aware sector rotation — what to buy, hold or avoid right now.")
     st.markdown("---")
     imf, imf_proj = load_imf()
     forex = load_forex()
@@ -298,6 +277,7 @@ elif page == "\U0001f4b9 Investment Signals":
     fx = forex.get("rate")
     _, sentiment_summary = score_news_feed(news_df)
     neg_pct = sentiment_summary["negative_pct"]
+    rate_env = get_rate_environment()
     risk = calculate_devaluation_risk(
         inflation=inf_val, mwk_per_usd=fx,
         gdp_growth=gdp_val, government_debt=debt_val,
@@ -305,14 +285,29 @@ elif page == "\U0001f4b9 Investment Signals":
     signals = generate_signals(
         inflation=inf_val, gdp_growth=gdp_val,
         government_debt=debt_val, current_account=ca_val,
-        mwk_per_usd=fx, devaluation_score=risk["score"])
+        mwk_per_usd=fx, devaluation_score=risk["score"],
+        rate_env=rate_env)
+    # Rate environment banner
+    phase = rate_env["cycle_phase"]
+    pr = get_current_policy_rate()
+    lending = rate_env["estimated_lending_rate"]
+    real_r = round(lending - inf_val, 1) if inf_val else None
+    if phase == "EARLY_EASING":
+        st.success(f"\U0001f7e2 EARLY EASING — Policy rate cut to {pr['rate']}%. Buy bonds now. Equities expanding. Real lending rate: {real_r}%")
+    elif phase == "TIGHTENING":
+        st.error(f"\U0001f534 TIGHTENING — Rates rising. Cash and short-duration assets win.")
+    elif phase == "PEAK":
+        st.warning(f"\U0001f7e0 PEAK RATES — Watch for the pivot. Buy bonds before first cut.")
+    else:
+        st.info(f"\u26aa RATES ON HOLD — Policy rate {pr['rate']}%. No strong directional signal.")
+    st.markdown("---")
     buy_count = sum(1 for s in signals if s["action"] == "BUY")
     hold_count = sum(1 for s in signals if s["action"] == "HOLD")
     avoid_count = sum(1 for s in signals if s["action"] == "AVOID")
     col1, col2, col3, col4 = st.columns(4)
-    with col1: st.metric("\U0001f7e2 BUY signals", buy_count)
-    with col2: st.metric("\U0001f7e1 HOLD signals", hold_count)
-    with col3: st.metric("\U0001f534 AVOID signals", avoid_count)
+    with col1: st.metric("\U0001f7e2 BUY", buy_count)
+    with col2: st.metric("\U0001f7e1 HOLD", hold_count)
+    with col3: st.metric("\U0001f534 AVOID", avoid_count)
     with col4: st.metric("Devaluation risk", f"{risk['score']}/100", risk["level"])
     st.markdown("---")
     filter_action = st.radio("Filter by action", ["All", "BUY", "HOLD", "AVOID"], horizontal=True)
@@ -327,7 +322,134 @@ elif page == "\U0001f4b9 Investment Signals":
         else:
             st.warning(f"{emoji} **{action} — {s['emoji']} {s['asset']}**\n\n{s['reason']}\n\n*Confidence: {s['confidence']}*")
     st.markdown("---")
-    st.caption("Signals generated from IMF actuals, live forex and news sentiment. Not financial advice.")
+    st.caption("Signals generated from IMF actuals, RBM rate cycle, live forex and news sentiment. Not financial advice.")
+
+
+# ════════════════════════════════════════════════════════════════
+# POLICY RATE
+# ════════════════════════════════════════════════════════════════
+elif page == "\U0001f3e6 Policy Rate":
+    st.title("RBM Policy Rate")
+    st.markdown("Reserve Bank of Malawi — Monetary Policy Committee decisions and rate cycle.")
+    st.markdown("---")
+    pr = get_current_policy_rate()
+    env = get_rate_environment()
+    hist = get_policy_rate_history()
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Policy Rate", f"{pr['rate']}%", f"{pr['change']:+.1f}pp — {pr['decision']}")
+    with col2:
+        st.metric("Lombard Rate", f"{pr['lombard_rate']}%", "Policy + 0.2pp")
+    with col3:
+        st.metric("Cycle Phase", env["cycle_phase"].replace("_", " "),
+            f"{env['streak']} consecutive {env['direction']} decision(s)")
+    with col4:
+        st.metric("Below Peak", f"{env['below_peak_by']}pp", f"Peak was {env['peak_rate']}%")
+    st.markdown("---")
+    phase = env["cycle_phase"]
+    if phase == "EARLY_EASING":
+        st.success("\U0001f7e2 EARLY EASING — RBM has begun cutting rates. Bonds benefit first, then equities. Rate cuts reduce the cost of capital — valuations expand.")
+    elif phase == "DEEP_EASING":
+        st.success("\U0001f7e2 DEEP EASING — Multiple cuts underway. Strong signal for equities and long-duration bonds.")
+    elif phase == "TIGHTENING":
+        st.error("\U0001f534 TIGHTENING — RBM is raising rates. Cash and short-duration assets win. Avoid leveraged positions.")
+    elif phase == "PEAK":
+        st.warning("\U0001f7e0 PEAK — Rates at maximum. Watch for the pivot. Bonds are attractive here.")
+    else:
+        st.info("\u26aa PLATEAU — Rates on hold. No strong directional signal.")
+    st.markdown("---")
+    st.subheader("MPC Decision History — 2022 to 2026")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=hist["date"], y=hist["rate"],
+        mode="lines+markers", name="Policy Rate",
+        line=dict(color="#F4C542", width=3),
+        marker=dict(size=10, color=[
+            "#FF4B4B" if c > 0 else "#00C49F" if c < 0 else "#aaaaaa"
+            for c in hist["change"]
+        ])
+    ))
+    fig.update_layout(title="RBM Policy Rate — MPC Decisions",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        font_color="white", yaxis_title="Rate (%)", hovermode="x unified", height=400)
+    fig.add_hline(y=pr["rate"], line_dash="dash", line_color="white",
+        annotation_text=f"Current: {pr['rate']}%", annotation_font_color="white")
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown("---")
+    st.subheader("MPC Decision Log")
+    display = hist[["date", "rate", "change", "decision", "note"]].copy()
+    display["date"] = display["date"].dt.strftime("%Y-%m-%d")
+    display["change"] = display["change"].apply(lambda x: f"{x:+.1f}pp" if x != 0 else "Hold")
+    display.columns = ["Date", "Rate (%)", "Change", "Decision", "Note"]
+    st.dataframe(display.sort_values("Date", ascending=False).reset_index(drop=True), use_container_width=True)
+    st.markdown("---")
+    st.caption("Source: RBM MPC press statements. Red dots = hikes. Green dots = cuts. Grey = hold.")
+
+
+# ════════════════════════════════════════════════════════════════
+# INTEREST RATES
+# ════════════════════════════════════════════════════════════════
+elif page == "\U0001f4b3 Interest Rates":
+    st.title("Interest Rate Transmission")
+    st.markdown("How the RBM policy rate flows through to lending, bonds and sector performance.")
+    st.markdown("---")
+    imf, imf_proj = load_imf()
+    pr = get_current_policy_rate()
+    env = get_rate_environment()
+    inf_val, _ = get_current_value("Inflation Rate (%)", imf)
+    policy_rate  = pr["rate"]
+    lombard      = pr["lombard_rate"]
+    lending_rate = pr["estimated_lending_rate"]
+    real_rate    = round(lending_rate - inf_val, 1) if inf_val else None
+    tbills       = env["tbill_rates"]
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1: st.metric("Policy Rate", f"{policy_rate}%", "RBM sets this")
+    with col2: st.metric("Lombard Rate", f"{lombard}%", "+0.2pp above policy")
+    with col3: st.metric("T-Bill 91-day", f"{tbills['91-day']['rate']}%", "Risk-free benchmark")
+    with col4: st.metric("Est. Lending Rate", f"{lending_rate}%", "+11pp spread over policy")
+    with col5:
+        if real_rate:
+            st.metric("Real Lending Rate", f"{real_rate}%", f"Lending minus {inf_val}% inflation")
+    st.markdown("---")
+    st.subheader("Rate flow diagram")
+    rates  = [policy_rate, lombard, tbills["91-day"]["rate"], tbills["182-day"]["rate"], tbills["364-day"]["rate"], lending_rate]
+    labels = ["Policy Rate", "Lombard Rate", "T-Bill 91d", "T-Bill 182d", "T-Bill 364d", "Est. Lending Rate"]
+    colors = ["#F4C542", "#F4C542", "#00C49F", "#00C49F", "#00C49F", "#FF4B4B"]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=labels, y=rates, marker_color=colors,
+        text=[f"{r}%" for r in rates], textposition="outside"))
+    if inf_val:
+        fig.add_hline(y=inf_val, line_dash="dash", line_color="white",
+            annotation_text=f"Inflation: {inf_val}%", annotation_font_color="white")
+    fig.update_layout(title="Interest Rate Structure — Malawi (current)",
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        font_color="white", yaxis_title="Rate (%)", height=400)
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown("---")
+    st.subheader("What this means for each sector")
+    if real_rate:
+        st.markdown(f"**Real lending rate: {real_rate}%** (lending {lending_rate}% minus inflation {inf_val}%)")
+        st.markdown("---")
+    sectors = [
+        ("\U0001f4dc Government Bonds", "FAVOURABLE" if env["cycle_phase"] in ["EARLY_EASING","DEEP_EASING"] else "NEUTRAL",
+         f"T-bill 364-day at {tbills['364-day']['rate']}%. In easing cycle — lock in high yields before rates fall further. Bond prices rise as rates fall." if env["cycle_phase"] in ["EARLY_EASING","DEEP_EASING"] else f"T-bill yields above inflation only if rate exceeds {inf_val}%."),
+        ("\U0001f3e6 Commercial Banks", "FAVOURABLE",
+         f"Banks borrow near policy rate ({policy_rate}%) and lend at ~{lending_rate}%. Spread of ~{lending_rate - policy_rate}pp = strong net interest income."),
+        ("\U0001f3e0 Real Estate", "NEUTRAL",
+         f"Nominal values rising with {inf_val}% inflation. Leveraged buyers pay {lending_rate}% on mortgages. Cash buyers: favourable. Debt buyers: expensive."),
+        ("\U0001f33d Agriculture", "FAVOURABLE",
+         "Insulated from rate cycle. Returns driven by rainfall, commodity prices and forex earnings. No debt dependency."),
+        ("\U0001f3ed Manufacturing", "UNFAVOURABLE",
+         f"Capital-intensive sectors pay ~{lending_rate}% to borrow. Real rate of {real_rate}% means borrowing costs exceed returns in most cases. Avoid until lending falls below 25%."),
+        ("\U0001f4c8 MSE Equities", "FAVOURABLE" if env["cycle_phase"] == "EARLY_EASING" else "NEUTRAL",
+         "Early easing: buy low-debt, cash-rich equities. Rate cuts lower discount rates — valuations expand. Avoid leveraged companies." if env["cycle_phase"] == "EARLY_EASING" else "Mixed. Be selective."),
+    ]
+    for sector, status, explanation in sectors:
+        if status == "FAVOURABLE": st.success(f"\U0001f7e2 **{sector}** — {explanation}")
+        elif status == "UNFAVOURABLE": st.error(f"\U0001f534 **{sector}** — {explanation}")
+        else: st.info(f"\u26aa **{sector}** — {explanation}")
+    st.markdown("---")
+    st.caption("Lending rate estimated from policy rate + historical spread. Source: RBM MPC press statements.")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -433,23 +555,17 @@ elif page == "\u26a0\ufe0f Risk Signals":
     st.subheader("Kwacha Devaluation Risk Score")
     col1, col2 = st.columns([1, 2])
     with col1:
-        label = get_risk_label(score)
-        st.metric("Risk Score", f"{score} / 100", label)
+        st.metric("Risk Score", f"{score} / 100", get_risk_label(score))
         if level == "CRITICAL": st.error(f"\U0001f534 {level} — {message}")
         elif level == "HIGH": st.warning(f"\U0001f7e0 {level} — {message}")
         elif level == "MODERATE": st.info(f"\U0001f7e1 {level} — {message}")
         else: st.success(f"\U0001f7e2 {level} — {message}")
     with col2:
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number", value=score,
+        fig = go.Figure(go.Indicator(mode="gauge+number", value=score,
             title={"text": "Devaluation Risk", "font": {"color": "white"}},
-            gauge={"axis": {"range": [0, 100], "tickcolor": "white"},
-                "bar": {"color": "white"},
-                "steps": [
-                    {"range": [0, 35], "color": "#1a472a"},
-                    {"range": [35, 55], "color": "#7d6608"},
-                    {"range": [55, 75], "color": "#784212"},
-                    {"range": [75, 100], "color": "#641e16"}],
+            gauge={"axis": {"range": [0,100], "tickcolor": "white"}, "bar": {"color": "white"},
+                "steps": [{"range": [0,35], "color": "#1a472a"}, {"range": [35,55], "color": "#7d6608"},
+                    {"range": [55,75], "color": "#784212"}, {"range": [75,100], "color": "#641e16"}],
                 "threshold": {"line": {"color": "red", "width": 4}, "thickness": 0.75, "value": score}}))
         fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="white", height=300)
         st.plotly_chart(fig, use_container_width=True)
@@ -474,8 +590,8 @@ elif page == "\u26a0\ufe0f Risk Signals":
         elif fx > 1200: signals.append(("\U0001f7e0 HIGH", "MWK/USD", f"1 USD = {fx:,.0f} MWK — Significant weakness."))
         else: signals.append(("\U0001f7e2 LOW", "MWK/USD", f"1 USD = {fx:,.0f} MWK — Relatively stable."))
     if neg_pct > 50: signals.append(("\U0001f7e0 HIGH", "News Sentiment", f"{neg_pct}% negative headlines — Bearish."))
-    elif neg_pct > 30: signals.append(("\U0001f7e1 MODERATE", "News Sentiment", f"{neg_pct}% negative headlines — Cautious."))
-    else: signals.append(("\U0001f7e2 LOW", "News Sentiment", f"{neg_pct}% negative headlines — Calm."))
+    elif neg_pct > 30: signals.append(("\U0001f7e1 MODERATE", "News Sentiment", f"{neg_pct}% negative — Cautious."))
+    else: signals.append(("\U0001f7e2 LOW", "News Sentiment", f"{neg_pct}% negative — Relatively calm."))
     for level, category, message in signals:
         if "CRITICAL" in level: st.error(f"{level} | **{category}** — {message}")
         elif "HIGH" in level: st.warning(f"{level} | **{category}** — {message}")
@@ -486,22 +602,17 @@ elif page == "\u26a0\ufe0f Risk Signals":
     for name, data in risk["components"].items():
         s = data["score"]
         w = data["weight"]
-        contribution = round(s * w, 1)
-        label = get_risk_label(s)
-        st.markdown(f"**{name}** — Score: {s}/100 | Weight: {int(w*100)}% | Contribution: {contribution}")
+        st.markdown(f"**{name}** — Score: {s}/100 | Weight: {int(w*100)}% | Contribution: {round(s*w,1)}")
         st.progress(s / 100)
     st.markdown("---")
-    st.caption("Score combines inflation, exchange rate, GDP, debt, current account and live news sentiment.")
+    st.caption("Score combines inflation, exchange rate, GDP, debt, current account and news sentiment.")
 
 
 # ════════════════════════════════════════════════════════════════
 # ALERTS & SUBSCRIBE
 # ════════════════════════════════════════════════════════════════
 elif page == "\U0001f514 Alerts & Subscribe":
-    from data.sentiment_scorer import score_news_feed
-    from data.devaluation_risk import calculate_devaluation_risk, get_risk_label
     from data.alert_scheduler import run_alert_check
-
     st.title("Alerts & Subscribe")
     st.markdown("Get notified by email when economic thresholds are breached.")
     st.markdown("---")
@@ -540,7 +651,6 @@ elif page == "\U0001f514 Alerts & Subscribe":
             st.progress(min(current / threshold, 1.0))
     st.markdown("---")
     st.subheader("\U0001f4e7 Subscribe to alerts")
-    st.markdown("Enter your email to receive alerts when thresholds are breached.")
     with st.form("alert_form"):
         email_input = st.text_input("Your email address", placeholder="yourname@gmail.com")
         submitted = st.form_submit_button("Subscribe & Check Now")
