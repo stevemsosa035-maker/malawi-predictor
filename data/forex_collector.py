@@ -1,139 +1,129 @@
 """
-Forex collector for Malawi Kwacha (MWK).
-Pulls live and historical MWK/USD exchange rates.
-Uses free APIs — no key needed.
+Forex collector — updated to pull all major currency pairs against MWK.
 """
 
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
+
+PRIMARY_URL = "https://open.er-api.com/v6/latest/MWK"
+BACKUP_URL  = "https://api.exchangerate-api.com/v4/latest/MWK"
+
+# Currencies to track against MWK
+# Format: code -> {name, flag, country_rate (central bank rate %), region}
+TRACKED_CURRENCIES = {
+    "USD": {"name": "US Dollar",          "flag": "\U0001f1fa\U0001f1f8", "country_rate": 5.25,  "region": "Global reserve"},
+    "GBP": {"name": "British Pound",       "flag": "\U0001f1ec\U0001f1e7", "country_rate": 5.00,  "region": "Europe"},
+    "EUR": {"name": "Euro",                "flag": "\U0001f1ea\U0001f1fa", "country_rate": 3.75,  "region": "Europe"},
+    "ZAR": {"name": "South African Rand",  "flag": "\U0001f1ff\U0001f1e6", "country_rate": 8.25,  "region": "SADC"},
+    "CNY": {"name": "Chinese Yuan",        "flag": "\U0001f1e8\U0001f1f3", "country_rate": 3.45,  "region": "Asia"},
+    "KES": {"name": "Kenyan Shilling",     "flag": "\U0001f1f0\U0001f1ea", "country_rate": 12.50, "region": "East Africa"},
+    "TZS": {"name": "Tanzanian Shilling",  "flag": "\U0001f1f9\U0001f1ff", "country_rate": 6.00,  "region": "East Africa"},
+    "ZMW": {"name": "Zambian Kwacha",      "flag": "\U0001f1ff\U0001f1f2", "country_rate": 13.50, "region": "SADC"},
+    "BWP": {"name": "Botswana Pula",       "flag": "\U0001f1e7\U0001f1fc", "country_rate": 2.40,  "region": "SADC"},
+    "MZN": {"name": "Mozambican Metical",  "flag": "\U0001f1f2\U0001f1ff", "country_rate": 14.25, "region": "SADC"},
+}
+
+MWK_POLICY_RATE = 24.0
+MWK_LENDING_RATE = 35.0
+
+
+def fetch_all_rates():
+    """
+    Fetch all MWK rates against tracked currencies.
+    Returns dict of currency -> MWK per 1 unit of that currency.
+    """
+    try:
+        resp = requests.get(PRIMARY_URL, timeout=15)
+        data = resp.json()
+        if data.get("result") == "success":
+            rates_vs_mwk = data.get("rates", {})
+            # rates_vs_mwk[USD] = how many USD per 1 MWK
+            # We want MWK per 1 USD, so invert
+            result = {}
+            for code, info in TRACKED_CURRENCIES.items():
+                if code in rates_vs_mwk and rates_vs_mwk[code] > 0:
+                    mwk_per_unit = round(1 / rates_vs_mwk[code], 4)
+                    result[code] = {
+                        "mwk_per_unit": mwk_per_unit,
+                        "name": info["name"],
+                        "flag": info["flag"],
+                        "country_rate": info["country_rate"],
+                        "region": info["region"],
+                    }
+            result["_timestamp"] = data.get("time_last_update_utc", str(datetime.now()))
+            result["_source"] = "open.er-api.com"
+            print(f"OK: {len(result)-2} currency pairs fetched")
+            return result
+    except Exception as e:
+        print(f"Primary forex API failed: {e}")
+    return {}
 
 
 def fetch_latest_rate():
-    """
-    Get the current MWK/USD exchange rate.
-    Returns a dict with rate and timestamp.
-    """
+    """Original single USD/MWK rate — kept for backward compatibility."""
     try:
-        url = "https://open.er-api.com/v6/latest/USD"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-
+        resp = requests.get(PRIMARY_URL, timeout=15)
+        data = resp.json()
         if data.get("result") == "success":
-            rate = data["rates"].get("MWK")
-            timestamp = data.get("time_last_update_utc", "Unknown")
-            print(f"Live rate: 1 USD = {rate} MWK")
-            print(f"Updated: {timestamp}")
-            return {
-                "rate": rate,
-                "timestamp": timestamp,
-                "source": "open.er-api.com"
-            }
-        else:
-            print("API returned error — trying backup...")
-            return fetch_backup_rate()
-
+            rates = data.get("rates", {})
+            usd_rate = rates.get("USD")
+            if usd_rate and usd_rate > 0:
+                mwk_per_usd = round(1 / usd_rate, 4)
+                print(f"Live rate: 1 USD = {mwk_per_usd} MWK")
+                return {
+                    "rate": mwk_per_usd,
+                    "timestamp": data.get("time_last_update_utc"),
+                    "source": "open.er-api.com"
+                }
     except Exception as e:
-        print(f"Primary API failed: {e}")
-        return fetch_backup_rate()
+        print(f"Forex fetch failed: {e}")
+    return {"rate": None, "timestamp": None, "source": "failed"}
 
 
-def fetch_backup_rate():
+def get_depreciation_summary(rates):
     """
-    Backup API in case primary fails.
+    Calculate carry trade metrics for each currency pair.
+    Returns ranked list from most to least attractive.
     """
-    try:
-        url = "https://api.exchangerate-api.com/v4/latest/USD"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        rate = data["rates"].get("MWK")
-        print(f"Backup rate: 1 USD = {rate} MWK")
-        return {
-            "rate": rate,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "source": "exchangerate-api.com"
-        }
-    except Exception as e:
-        print(f"Backup API also failed: {e}")
-        return {"rate": None, "timestamp": None, "source": "failed"}
+    if not rates:
+        return []
 
+    analysis = []
+    for code, data in rates.items():
+        if code.startswith("_"):
+            continue
+        mwk = data["mwk_per_unit"]
+        country_rate = data["country_rate"]
+        # Carry spread = MWK lending rate minus foreign rate
+        # Positive = you earn more holding MWK deposits than foreign
+        # Negative = foreign currency deposits earn more
+        carry_spread = MWK_LENDING_RATE - country_rate
+        # If carry_spread is positive, MWK is high yielding
+        # But MWK is depreciating — so net carry depends on depreciation pace
+        analysis.append({
+            "code": code,
+            "name": data["name"],
+            "flag": data["flag"],
+            "region": data["region"],
+            "mwk_per_unit": mwk,
+            "country_rate": country_rate,
+            "carry_spread": round(carry_spread, 2),
+        })
 
-def fetch_historical_rates(days=90):
-    """
-    Build a DataFrame of recent MWK/USD rates.
-    Note: Free APIs give limited history.
-    We combine with World Bank annual data for longer history.
-    """
-    try:
-        records = []
-        today = datetime.today()
-
-        for i in range(days, 0, -5):
-            date = today - timedelta(days=i)
-            date_str = date.strftime("%Y-%m-%d")
-            url = f"https://open.er-api.com/v6/history/USD/{date.year}/{date.month}/{date.day}"
-
-            try:
-                resp = requests.get(url, timeout=8)
-                d = resp.json()
-                if d.get("result") == "success":
-                    rate = d["rates"].get("MWK")
-                    if rate:
-                        records.append({"date": date_str, "rate": rate})
-            except:
-                continue
-
-        if records:
-            df = pd.DataFrame(records)
-            df["date"] = pd.to_datetime(df["date"])
-            df = df.sort_values("date").reset_index(drop=True)
-            print(f"Got {len(df)} historical rate records")
-            return df
-        else:
-            print("No historical records retrieved")
-            return pd.DataFrame(columns=["date", "rate"])
-
-    except Exception as e:
-        print(f"Historical fetch failed: {e}")
-        return pd.DataFrame(columns=["date", "rate"])
-
-
-def get_depreciation_summary(df):
-    """
-    Calculate how much MWK has lost value over different periods.
-    Higher number = more depreciation = more risk.
-    """
-    if df is None or df.empty or len(df) < 2:
-        return {}
-
-    latest = df.iloc[-1]["rate"]
-    summary = {}
-
-    periods = {"30 days": 6, "60 days": 12, "90 days": 18}
-    for label, steps_back in periods.items():
-        if len(df) > steps_back:
-            old_rate = df.iloc[-(steps_back)]["rate"]
-            change_pct = ((latest - old_rate) / old_rate) * 100
-            summary[label] = round(change_pct, 2)
-
-    return summary
+    # Sort by MWK per unit descending (strongest foreign currency first)
+    analysis.sort(key=lambda x: x["mwk_per_unit"], reverse=True)
+    return analysis
 
 
 if __name__ == "__main__":
-    print("Testing Forex collector...")
+    print("Testing multi-currency forex collector...")
     print("")
-
-    result = fetch_latest_rate()
-    print(f"Result: {result}")
-    print("")
-
-    print("Fetching recent history (this may take a moment)...")
-    df = fetch_historical_rates(days=30)
-
-    if not df.empty:
+    rates = fetch_all_rates()
+    if rates:
+        analysis = get_depreciation_summary(rates)
+        print(f"Updated: {rates['_timestamp']}")
         print("")
-        summary = get_depreciation_summary(df)
-        print("Depreciation summary:")
-        for period, change in summary.items():
-            direction = "weaker" if change > 0 else "stronger"
-            print(f"  {period}: MWK {direction} by {abs(change)}%")
+        print("Currency rankings vs MWK (strongest first):")
+        for i, a in enumerate(analysis, 1):
+            print(f"  {i}. {a['flag']} {a['code']} — {a['mwk_per_unit']:,.2f} MWK | {a['name']} | Carry spread: {a['carry_spread']:+.1f}pp")

@@ -33,6 +33,7 @@ page = st.sidebar.radio(
         "\U0001f4c8 Inflation",
         "\U0001f52e Forecasts",
         "\U0001f4b9 Investment Signals",
+        "\U0001f4b1 Forex Trading",
         "\U0001f3e6 Policy Rate",
         "\U0001f4b3 Interest Rates",
         "\U0001f3e6 Macro Indicators",
@@ -323,6 +324,236 @@ elif page == "\U0001f4b9 Investment Signals":
             st.warning(f"{emoji} **{action} — {s['emoji']} {s['asset']}**\n\n{s['reason']}\n\n*Confidence: {s['confidence']}*")
     st.markdown("---")
     st.caption("Signals generated from IMF actuals, RBM rate cycle, live forex and news sentiment. Not financial advice.")
+
+# ================================================================
+# FOREX TRADING
+# ================================================================
+elif page == "\U0001f4b1 Forex Trading":
+    from data.forex_collector import fetch_all_rates, get_depreciation_summary
+
+    st.title("Forex Trading Terminal")
+    st.markdown("---")
+
+    # ── Live news ticker ─────────────────────────────────────────
+    news_df = load_news()
+    if not news_df.empty:
+        scored_df, _ = score_news_feed(news_df)
+        fx_keywords = ["kwacha", "forex", "currency", "dollar", "exchange rate",
+            "devaluation", "depreciation", "reserve", "rbm", "import", "export",
+            "trade", "rand", "pound", "euro", "inflation", "imf", "fuel price"]
+        fx_news = scored_df[scored_df["title"].str.lower().str.contains(
+            "|".join(fx_keywords), na=False)].head(15)
+        if not fx_news.empty:
+            ticker_items = " \u2022\u2022\u2022 ".join(
+                [f"{row['title']}" for _, row in fx_news.iterrows()]
+            )
+            st.markdown("""
+                <style>
+                .ticker-wrap {
+                    width: 100%;
+                    background: #0d1117;
+                    border-top: 2px solid #F4C542;
+                    border-bottom: 2px solid #F4C542;
+                    padding: 8px 0;
+                    overflow: hidden;
+                    margin-bottom: 16px;
+                }
+                .ticker {
+                    display: inline-block;
+                    white-space: nowrap;
+                    animation: ticker-scroll 60s linear infinite;
+                    color: #F4C542;
+                    font-size: 14px;
+                    font-weight: bold;
+                    letter-spacing: 0.5px;
+                }
+                @keyframes ticker-scroll {
+                    0%   { transform: translateX(100vw); }
+                    100% { transform: translateX(-100%); }
+                }
+                </style>
+            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="ticker-wrap"><span class="ticker">\U0001f4f0 MARKET NEWS: {ticker_items}</span></div>',
+                unsafe_allow_html=True)
+
+    # ── Fetch live rates ─────────────────────────────────────────
+    with st.spinner("Fetching live currency rates..."):
+        rates = fetch_all_rates()
+
+    if not rates:
+        st.error("Could not fetch live rates. Check your connection.")
+    else:
+        analysis = get_depreciation_summary(rates)
+        timestamp = rates.get("_timestamp", "")[:25]
+
+        # ── Rate environment context ──────────────────────────────
+        env = get_rate_environment()
+        pr = get_current_policy_rate()
+        imf, _ = load_imf()
+        inf_val, _ = get_current_value("Inflation Rate (%)", imf)
+        lending = pr["estimated_lending_rate"]
+        real_rate = round(lending - inf_val, 1) if inf_val else None
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: st.metric("MWK Policy Rate", f"{pr['rate']}%", env["cycle_phase"].replace("_"," "))
+        with col2: st.metric("MWK Lending Rate", f"{lending}%", "+11pp over policy")
+        with col3: st.metric("Real Rate (MWK)", f"{real_rate}%" if real_rate else "N/A", "Lending minus inflation")
+        with col4: st.metric("Updated", timestamp[:16], rates.get("_source",""))
+
+        st.markdown("---")
+
+        # ── Currency performance table ────────────────────────────
+        st.subheader("\U0001f4ca Currency Rankings vs MWK")
+        st.markdown("Ranked by strength. The more MWK it takes to buy one unit — the stronger that currency.")
+
+        rows = []
+        for a in analysis:
+            carry = a["carry_spread"]
+            carry_str = f"+{carry:.1f}pp MWK advantage" if carry > 0 else f"{carry:.1f}pp foreign advantage"
+            rows.append({
+                "Currency": f"{a['flag']} {a['code']}",
+                "Name": a["name"],
+                "MWK per 1 unit": f"{a['mwk_per_unit']:,.2f}",
+                "Foreign Rate %": a["country_rate"],
+                "Carry Spread": carry_str,
+                "Region": a["region"],
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+        st.markdown("---")
+
+        # ── Visual bar chart ─────────────────────────────────────
+        st.subheader("MWK per 1 unit of each currency")
+        codes  = [a["code"]          for a in analysis]
+        values = [a["mwk_per_unit"]  for a in analysis]
+        flags  = [a["flag"]          for a in analysis]
+        labels = [f"{f} {c}" for f, c in zip(flags, codes)]
+
+        fig = go.Figure(go.Bar(
+            x=labels, y=values,
+            marker_color=["#FF4B4B" if v > 500 else "#F4C542" if v > 50 else "#00C49F" for v in values],
+            text=[f"{v:,.0f}" for v in values],
+            textposition="outside"
+        ))
+        fig.update_layout(
+            title="MWK per 1 unit — Higher = stronger foreign currency",
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            font_color="white", yaxis_title="MWK", height=400)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
+
+        # ── Carry trade analysis ──────────────────────────────────
+        st.subheader("\U0001f9e0 Carry Trade Analysis")
+        st.markdown(f"MWK lending rate is **{lending}%**. Compare against each country's rate. Wide positive spread = MWK is high-yielding but risky.")
+
+        for a in analysis:
+            carry = a["carry_spread"]
+            code = a["code"]
+            name = a["name"]
+            flag = a["flag"]
+            c_rate = a["country_rate"]
+            mwk = a["mwk_per_unit"]
+
+            if carry > 15:
+                verdict = "\U0001f534 MWK massively higher-yielding but devaluation risk dominates. Avoid holding MWK long."
+            elif carry > 8:
+                verdict = "\U0001f7e0 MWK higher-yielding. But kwacha depreciation may eat the carry. Hedge required."
+            elif carry > 0:
+                verdict = "\U0001f7e1 Slight MWK yield advantage. Monitor depreciation pace."
+            else:
+                verdict = "\U0001f7e2 Foreign currency has yield advantage AND likely appreciating vs MWK. Strong hold candidate."
+
+            with st.expander(f"{flag} {code} — {name} | Rate: {c_rate}% | MWK: {mwk:,.2f} | Spread: {carry:+.1f}pp"):
+                st.markdown(verdict)
+                st.markdown(f"**{code} central bank rate:** {c_rate}%")
+                st.markdown(f"**MWK lending rate:** {lending}%")
+                st.markdown(f"**Carry spread:** {carry:+.1f}pp (positive = MWK higher yielding)")
+                st.markdown(f"**Current rate:** 1 {code} = {mwk:,.2f} MWK")
+
+        st.markdown("---")
+
+        # ── High conviction trade call ─────────────────────────────
+        st.subheader("\U0001f3af The Trade — High Conviction Call")
+
+        usd_data = rates.get("USD")
+        usd_rate = usd_data["mwk_per_unit"] if usd_data else None
+
+        # Devaluation risk
+        news_df2 = load_news()
+        _, sent = score_news_feed(news_df2)
+        neg_pct = sent["negative_pct"]
+        risk = calculate_devaluation_risk(
+            inflation=inf_val, mwk_per_usd=usd_rate,
+            gdp_growth=None, government_debt=None,
+            current_account=None, news_negative_pct=neg_pct)
+
+        dev_score = risk["score"]
+
+        if dev_score >= 65 and inf_val and inf_val > 20:
+            st.error("""
+## \U0001f534 POSITION: LONG USD / SHORT MWK
+
+**The setup:**
+- Devaluation risk score: high
+- MWK inflation running above 20% — purchasing power destruction
+- RBM in early easing cycle — rate cuts reduce MWK yield advantage
+- Current account deficit means more USD going out than coming in
+
+**The trade:**
+Convert MWK savings to USD now. Do not wait for the next cut.
+Every RBM rate cut narrows the spread. The kwacha will follow the rate.
+
+**Risk:**
+RBM intervention could temporarily support MWK.
+Strong tobacco season could bring USD inflows.
+
+**Sizing:**
+60-70% of liquid savings in USD. Keep 30% in MWK T-bills for yield.
+            """)
+        elif dev_score >= 45:
+            st.warning("""
+## \U0001f7e0 POSITION: DIVERSIFY INTO USD AND ZAR
+
+**The setup:**
+- Moderate devaluation risk
+- Early easing cycle — watch for acceleration in rate cuts
+
+**The trade:**
+Hold 40% USD, 20% ZAR (regional liquidity), 40% MWK T-bills.
+ZAR gives you regional exposure with better liquidity than other SADC currencies.
+
+**Risk:**
+ZAR itself volatile — South Africa political risk.
+            """)
+        else:
+            st.success("""
+## \U0001f7e2 POSITION: HOLD MWK T-BILLS — WAIT FOR CLARITY
+
+**The setup:**
+- Devaluation risk manageable
+- MWK T-bills at 28%+ yield
+
+**The trade:**
+Stay in 364-day T-bills. Collect the yield. Reassess after next MPC.
+            """)
+
+        st.markdown("---")
+
+        # ── Currency-affecting news ───────────────────────────────
+        st.subheader("\U0001f4f0 News affecting these currencies")
+        if not news_df.empty:
+            if not fx_news.empty:
+                for _, row in fx_news.iterrows():
+                    emoji = get_sentiment_emoji(row.get("sentiment", "neutral"))
+                    st.markdown(f"{emoji} **[{row['source']}]** [{row['title']}]({row['link']})")
+                    st.caption(str(row["date"])[:25])
+                    st.markdown("---")
+            else:
+                st.info("No currency-specific headlines right now.")
+
+        st.caption("Rates from open.er-api.com. Carry analysis uses RBM lending rate vs counterpart central bank rates. Not financial advice.")
 
 
 # ════════════════════════════════════════════════════════════════
